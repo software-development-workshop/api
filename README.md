@@ -52,14 +52,9 @@ uv run uvicorn accounts.main:app --reload
 
 ## How we work
 
-Short-lived branches off `main`, one per issue, named `<type>/<issue>-<slug>`. Nothing
-reaches `main` without a pull request approved by someone other than its author, and CI has
-to be green: format, lint, 85% unit coverage, integration tests.
-
-A pull request body says what changed, why that option and not the others, and how it was
-tested. Design decisions with real alternatives and consequences that outlive the sprint get
-an ADR under [`docs/adr/`](docs/adr); everything else lives in the pull request that made
-the decision.
+[`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) has the principles, the workflow, the
+definition of done and what the assignment fixes for us. Read it before opening a pull
+request. Decisions already taken live in [`docs/adr/`](docs/adr).
 
 Pending work is tracked on the
 [Tasks board](https://github.com/orgs/software-development-workshop/projects/1). A task that
