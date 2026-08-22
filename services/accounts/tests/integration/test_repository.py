@@ -1,8 +1,11 @@
+import uuid
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from accounts.models import Account
+from accounts.models import Account, VerificationToken
 from accounts.repository import AccountsRepository
 
 
@@ -50,3 +53,54 @@ def test_database_rejects_a_duplicate_handle_whatever_the_casing(session: Sessio
 
     with pytest.raises(IntegrityError):
         repository.add(account(email="otro@udesa.edu.ar", handle="JUAN"))
+
+
+def token(account_id: uuid.UUID, digest: str = "a" * 64, hours: int = 24) -> VerificationToken:
+    return VerificationToken(
+        account_id=account_id,
+        token_digest=digest,
+        expires_at=datetime.now(UTC) + timedelta(hours=hours),
+    )
+
+
+def test_stores_a_token_and_finds_it_by_its_digest(session: Session) -> None:
+    repository = AccountsRepository(session)
+    stored = repository.add(account())
+
+    saved = repository.add_token(token(stored.id))
+
+    assert repository.find_token("a" * 64).id == saved.id
+
+
+def test_a_digest_nobody_issued_finds_nothing(session: Session) -> None:
+    assert AccountsRepository(session).find_token("b" * 64) is None
+
+
+def test_finds_an_account_by_email_whatever_the_casing(session: Session) -> None:
+    repository = AccountsRepository(session)
+    repository.add(account(email="Juan@Udesa.edu.ar"))
+
+    assert repository.find_by_email("JUAN@udesa.EDU.ar") is not None
+
+
+def test_invalidating_burns_every_live_token_of_the_account(session: Session) -> None:
+    repository = AccountsRepository(session)
+    stored = repository.add(account())
+    repository.add_token(token(stored.id, digest="c" * 64))
+    repository.add_token(token(stored.id, digest="d" * 64))
+
+    repository.invalidate_tokens_for(stored.id)
+
+    assert repository.find_token("c" * 64).used_at is not None
+    assert repository.find_token("d" * 64).used_at is not None
+
+
+def test_marking_verified_stamps_the_token_and_the_account(session: Session) -> None:
+    repository = AccountsRepository(session)
+    stored = repository.add(account())
+    saved = repository.add_token(token(stored.id))
+
+    verified = repository.mark_verified(saved)
+
+    assert verified.verified_at is not None
+    assert repository.find_token("a" * 64).used_at is not None

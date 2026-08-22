@@ -20,5 +20,5 @@ def session() -> Iterator[Session]:
     with Session(get_engine()) as session:
         yield session
         session.rollback()
-        session.execute(text("truncate table accounts"))
+        session.execute(text("truncate table accounts cascade"))
         session.commit()
