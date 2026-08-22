@@ -12,6 +12,11 @@ services:
     ports:
       - "5433:5432"
 
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "8025:8025"   # web inbox, to read the verification email while developing
+
   accounts:
     build: ./services/accounts
     environment:
@@ -20,8 +25,14 @@ services:
       DB_NAME: accounts
       DB_USER: accounts
       DB_PASSWORD: accounts
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+      SMTP_FROM: no-reply@udesa-x.dev
+      PUBLIC_BASE_URL: http://localhost:8000
     ports:
       - "8000:8000"
     depends_on:
       accounts-db:
         condition: service_healthy
+      mailpit:
+        condition: service_started

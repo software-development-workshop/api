@@ -19,7 +19,8 @@ From a clean clone, with Docker running:
 docker compose up --build
 ```
 
-The API docs are then at <http://localhost:8000/docs>.
+The API docs are then at <http://localhost:8000/docs>, and the verification emails land in
+the Mailpit inbox at <http://localhost:8025> — nothing leaves the machine while developing.
 
 ## Work on a service
 
@@ -27,9 +28,8 @@ Each service is a self-contained `uv` project.
 
 ```bash
 cd services/accounts
-cp .env.template .env      # then fill it in; the compose values below work locally
 uv sync
-uv run pytest tests/unit
+uv run pytest tests/unit          # no configuration needed
 ```
 
 The integration tests need the database. `compose.yaml` publishes it on **5433**, so it does
@@ -39,7 +39,8 @@ not collide with a Postgres already running on the default port:
 docker compose up -d accounts-db
 cd services/accounts
 DB_HOST=localhost DB_PORT=5433 DB_NAME=accounts DB_USER=accounts DB_PASSWORD=accounts \
-  uv run pytest tests/integration
+  SMTP_HOST=localhost SMTP_PORT=1025 SMTP_FROM=no-reply@udesa-x.dev \
+  PUBLIC_BASE_URL=http://localhost:8000 uv run pytest tests/integration
 ```
 
 To run the service against that database, with migrations applied:

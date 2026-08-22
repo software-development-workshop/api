@@ -12,6 +12,14 @@ class Settings(BaseSettings):
     db_user: str
     db_password: str
 
+    smtp_host: str
+    smtp_port: int
+    smtp_from: str
+
+    # Where the link in the verification email points. It is the client's address, not this
+    # service's: in production a reverse proxy sits in front.
+    public_base_url: str
+
     @property
     def database_url(self) -> str:
         return (
