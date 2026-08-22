@@ -1,0 +1,63 @@
+from fastapi import Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+
+PROBLEM_BASE = "https://udesa-x.dev/problems"
+CONTENT_TYPE = "application/problem+json"
+
+
+class DomainError(Exception):
+    """Something the caller asked for that the rules do not allow.
+
+    Subclasses carry the HTTP status because this is the only place that maps a rule to a
+    response; the service layer raises them without knowing HTTP exists.
+    """
+
+    status = 400
+    slug = "domain-error"
+    title = "Request rejected"
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(detail)
+        self.detail = detail
+
+
+class EmailAlreadyRegisteredError(DomainError):
+    status = 409
+    slug = "email-already-registered"
+    title = "Email already registered"
+
+
+class HandleTakenError(DomainError):
+    status = 409
+    slug = "handle-taken"
+    title = "Handle taken"
+
+
+def _problem(status: int, slug: str, title: str, detail: str, **extra: object) -> JSONResponse:
+    body = {
+        "type": f"{PROBLEM_BASE}/{slug}",
+        "title": title,
+        "status": status,
+        "detail": detail,
+        **extra,
+    }
+    return JSONResponse(status_code=status, content=body, media_type=CONTENT_TYPE)
+
+
+async def domain_error_handler(_: Request, error: DomainError) -> JSONResponse:
+    return _problem(error.status, error.slug, error.title, error.detail)
+
+
+async def validation_error_handler(_: Request, error: RequestValidationError) -> JSONResponse:
+    errors = [
+        {"field": ".".join(str(p) for p in e["loc"][1:]) or "body", "message": e["msg"]}
+        for e in error.errors()
+    ]
+    return _problem(
+        422,
+        "validation-error",
+        "Validation failed",
+        "One or more fields are invalid.",
+        errors=errors,
+    )

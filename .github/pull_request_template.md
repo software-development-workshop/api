@@ -29,8 +29,6 @@ otra persona pueda repetirlo.
 
 ---
 
-<!-- La definición de done que esto refleja vive en conventions/pull-requests.md. -->
-
 - [ ] Se cumplen todos los criterios de aceptación del issue
 - [ ] Tests agregados, CI en verde, umbral de cobertura pasando
 - [ ] Tests de integración agregados, si el cambio cruza el límite de un servicio
