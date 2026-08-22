@@ -1,6 +1,6 @@
 # UdeSA-X
 
-Mobile-first social platform, built for Taller de Desarrollo de Software (UdeSA).
+Mobile-first social platform, built for a university software development workshop.
 
 The services live here, one directory each under `services/`. Every service is
 containerised and owns its own database; they share a repository, not a runtime.
