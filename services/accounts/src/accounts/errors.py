@@ -61,3 +61,15 @@ async def validation_error_handler(_: Request, error: RequestValidationError) ->
         "One or more fields are invalid.",
         errors=errors,
     )
+
+
+class InvalidVerificationTokenError(DomainError):
+    status = 400
+    slug = "invalid-verification-token"
+    title = "Invalid verification token"
+
+
+class ExpiredVerificationTokenError(DomainError):
+    status = 410
+    slug = "expired-verification-token"
+    title = "Verification token expired"

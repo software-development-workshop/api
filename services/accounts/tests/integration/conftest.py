@@ -7,6 +7,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from accounts.db import get_engine
+from tests.fakes import FakeMailer
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -22,3 +23,8 @@ def session() -> Iterator[Session]:
         session.rollback()
         session.execute(text("truncate table accounts cascade"))
         session.commit()
+
+
+@pytest.fixture
+def mailer() -> FakeMailer:
+    return FakeMailer()
