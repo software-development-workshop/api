@@ -4,7 +4,13 @@ version = "0.1.0"
 description = "Accounts service: registration, verification and authentication"
 requires-python = ">=3.13"
 dependencies = [
+    "alembic>=1.14",
+    "argon2-cffi>=23.1",
     "fastapi>=0.115",
+    "psycopg[binary]>=3.2",
+    "pydantic-settings>=2.7",
+    "pydantic[email]>=2.10",
+    "sqlalchemy>=2.0",
     "uvicorn[standard]>=0.32",
 ]
 
@@ -26,12 +32,17 @@ packages = ["src/accounts"]
 [tool.ruff]
 line-length = 100
 src = ["src", "tests"]
+extend-exclude = ["migrations"]
 
 [tool.ruff.lint]
 select = ["A", "B", "C4", "E", "F", "I", "N", "RUF", "S", "UP"]
 
+[tool.ruff.lint.isort]
+known-first-party = ["accounts", "tests"]
+
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101"]
+"tests/**" = ["S101", "S105", "S106"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]

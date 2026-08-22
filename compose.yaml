@@ -1,5 +1,27 @@
 services:
+  accounts-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: accounts
+      POSTGRES_USER: accounts
+      POSTGRES_PASSWORD: accounts
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U accounts"]
+      interval: 2s
+      retries: 15
+    ports:
+      - "5433:5432"
+
   accounts:
     build: ./services/accounts
+    environment:
+      DB_HOST: accounts-db
+      DB_PORT: 5432
+      DB_NAME: accounts
+      DB_USER: accounts
+      DB_PASSWORD: accounts
     ports:
       - "8000:8000"
+    depends_on:
+      accounts-db:
+        condition: service_healthy
