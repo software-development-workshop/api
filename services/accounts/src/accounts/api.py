@@ -27,6 +27,11 @@ class RegistrationRequest(BaseModel):
     handle: str
     password: str
 
+    @field_validator("email")
+    @classmethod
+    def _normalise_email(cls, value: EmailStr) -> str:
+        return str(value).lower()
+
     @field_validator("handle")
     @classmethod
     def _check_handle(cls, value: str) -> str:
@@ -44,7 +49,7 @@ class RegistrationResponse(BaseModel):
     handle: str
 
 
-@router.post("/registrations", status_code=status.HTTP_201_CREATED)
+@router.post("/api/v1/registrations", status_code=status.HTTP_201_CREATED)
 def register_account(body: RegistrationRequest, repository: RepositoryDep) -> RegistrationResponse:
     account = register(repository, body.email, body.handle, body.password)
     return RegistrationResponse(id=account.id, email=account.email, handle=f"@{account.handle}")

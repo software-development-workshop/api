@@ -1,7 +1,12 @@
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from accounts.errors import EmailAlreadyRegisteredError, HandleTakenError
 from accounts.models import Account
+
+_EMAIL_UNIQUE_INDEX = "ix_accounts_email_lower"
+_HANDLE_UNIQUE_INDEX = "ix_accounts_handle_lower"
 
 
 class AccountsRepository:
@@ -10,7 +15,16 @@ class AccountsRepository:
 
     def add(self, account: Account) -> Account:
         self._session.add(account)
-        self._session.commit()
+        try:
+            self._session.commit()
+        except IntegrityError as error:
+            self._session.rollback()
+            constraint_name = getattr(getattr(error.orig, "diag", None), "constraint_name", None)
+            if constraint_name == _EMAIL_UNIQUE_INDEX:
+                raise EmailAlreadyRegisteredError("That email is already registered.") from error
+            if constraint_name == _HANDLE_UNIQUE_INDEX:
+                raise HandleTakenError("That handle is already taken.") from error
+            raise
         self._session.refresh(account)
         return account
 

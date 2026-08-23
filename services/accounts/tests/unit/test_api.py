@@ -25,7 +25,7 @@ def client(repository: FakeAccountsRepository) -> TestClient:
 
 
 def test_registers_and_echoes_the_handle_with_its_at_sign(client: TestClient) -> None:
-    response = client.post("/registrations", json=VALID)
+    response = client.post("/api/v1/registrations", json=VALID)
 
     assert response.status_code == 201
     body = response.json()
@@ -34,13 +34,27 @@ def test_registers_and_echoes_the_handle_with_its_at_sign(client: TestClient) ->
     assert "password" not in body
 
 
+def test_versioned_registration_route_returns_canonical_identity_values(
+    client: TestClient,
+) -> None:
+    response = client.post(
+        "/api/v1/registrations",
+        json={**VALID, "email": "JUAN@UDESA.EDU.AR", "handle": "@JUAN"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["email"] == "juan@udesa.edu.ar"
+    assert response.json()["handle"] == "@juan"
+
+
 def test_never_echoes_the_password_hash(client: TestClient) -> None:
-    assert "password_hash" not in client.post("/registrations", json=VALID).json()
+    assert "password_hash" not in client.post("/api/v1/registrations", json=VALID).json()
 
 
 def test_reports_every_invalid_field_in_one_response(client: TestClient) -> None:
     response = client.post(
-        "/registrations", json={"email": "not-an-email", "handle": "juan", "password": "short"}
+        "/api/v1/registrations",
+        json={"email": "not-an-email", "handle": "juan", "password": "short"},
     )
 
     assert response.status_code == 422
@@ -53,7 +67,7 @@ def test_reports_every_invalid_field_in_one_response(client: TestClient) -> None
 def test_rejects_a_missing_required_field(client: TestClient, missing: str) -> None:
     body = {k: v for k, v in VALID.items() if k != missing}
 
-    response = client.post("/registrations", json=body)
+    response = client.post("/api/v1/registrations", json=body)
 
     assert response.status_code == 422
     assert [e["field"] for e in response.json()["errors"]] == [missing]
@@ -61,7 +75,7 @@ def test_rejects_a_missing_required_field(client: TestClient, missing: str) -> N
 
 @pytest.mark.parametrize("empty", ["", "   ", None])
 def test_rejects_an_empty_or_null_field(client: TestClient, empty: str | None) -> None:
-    assert client.post("/registrations", json={**VALID, "handle": empty}).status_code == 422
+    assert client.post("/api/v1/registrations", json={**VALID, "handle": empty}).status_code == 422
 
 
 def test_rejects_an_email_already_registered(
@@ -69,7 +83,7 @@ def test_rejects_an_email_already_registered(
 ) -> None:
     repository.accounts.append(Account(email="JUAN@udesa.edu.ar", handle="otro"))
 
-    response = client.post("/registrations", json=VALID)
+    response = client.post("/api/v1/registrations", json=VALID)
 
     assert response.status_code == 409
     assert response.headers["content-type"].startswith("application/problem+json")
@@ -81,7 +95,7 @@ def test_rejects_a_handle_already_taken(
 ) -> None:
     repository.accounts.append(Account(email="otro@udesa.edu.ar", handle="JUAN"))
 
-    response = client.post("/registrations", json=VALID)
+    response = client.post("/api/v1/registrations", json=VALID)
 
     assert response.status_code == 409
     assert response.json()["type"].endswith("/handle-taken")
