@@ -7,6 +7,7 @@ import pytest
 from accounts import email as email_module
 from accounts.config import get_settings
 from accounts.email import SmtpMailer
+from accounts.main import app
 
 ENV = {
     "DB_HOST": "db",
@@ -62,7 +63,22 @@ def test_link_points_at_the_public_url_not_at_this_service(smtp: type[FakeSmtp])
     SmtpMailer().send_verification("juan@udesa.edu.ar", "a-token")
 
     body = smtp.sent[0].get_content()
-    assert "https://api.udesa-x.dev/verifications/a-token" in body
+    assert "https://api.udesa-x.dev/api/v1/verifications/a-token" in body
+
+
+def test_the_emailed_link_matches_a_route_this_service_serves(smtp: type[FakeSmtp]) -> None:
+    """A link nobody answers leaves the account unusable, and nothing else would catch it.
+
+    Read off the message rather than rebuilt from the same constant: the point is that the
+    two ends still agree, which a test deriving both from one place cannot show.
+    """
+    SmtpMailer().send_verification("juan@udesa.edu.ar", "a-token")
+
+    body = smtp.sent[0].get_content()
+    link = next(word for word in body.split() if word.startswith("http"))
+    path = link.removeprefix("https://api.udesa-x.dev").replace("a-token", "{token}")
+
+    assert path in app.openapi()["paths"]
 
 
 def test_connects_to_the_configured_server(smtp: type[FakeSmtp]) -> None:

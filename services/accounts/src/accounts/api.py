@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Response, status
 from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy.orm import Session
 
+from accounts.config import API_PREFIX
 from accounts.db import get_session
 from accounts.email import SmtpMailer
 from accounts.models import Account
@@ -12,8 +13,7 @@ from accounts.repository import AccountsRepository
 from accounts.service import Mailer, register, resend_verification, verify
 from accounts.validation import normalise_handle, validate_password
 
-# The version lives on the router, so every route under it moves together when v2 exists.
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix=API_PREFIX)
 
 SessionDep = Annotated[Session, Depends(get_session)]
 

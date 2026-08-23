@@ -1,7 +1,7 @@
 import smtplib
 from email.message import EmailMessage
 
-from accounts.config import get_settings
+from accounts.config import API_PREFIX, get_settings
 
 
 class SmtpMailer:
@@ -21,7 +21,7 @@ class SmtpMailer:
         message["Subject"] = "Verificá tu cuenta de UdeSA-X"
         message.set_content(
             "Para activar tu cuenta, entrá a este link:\n\n"
-            f"{settings.public_base_url}/verifications/{token}\n\n"
+            f"{settings.public_base_url}{API_PREFIX}/verifications/{token}\n\n"
             "El link vence en 24 horas. Si no fuiste vos, ignorá este mensaje."
         )
 

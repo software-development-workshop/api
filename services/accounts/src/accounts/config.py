@@ -2,6 +2,10 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Both the routes and the link in the verification email hang off this, and they have to
+# agree: a link nobody serves is a dead account.
+API_PREFIX = "/api/v1"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
