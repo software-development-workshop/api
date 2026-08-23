@@ -39,10 +39,8 @@ Cuesta una tabla, un worker, su ciclo de vida, y tests de integración para el d
 Vale la pena cuando perder el mensaje es caro y no hay otra forma de recuperarlo; acá el
 usuario aprieta "reenviar" y sigue.
 
-Vale registrar que la implementación anterior de esta historia arrancó síncrona y el review
-la empujó hacia el outbox. Ese movimiento es el que este ADR quiere hacer explícito en vez
-de repetir: si aparece evidencia de que los envíos fallan seguido, es un ADR nuevo que
-supersede a este, no una discusión de review otra vez.
+Si aparece evidencia de que los envíos fallan seguido, la respuesta es un ADR nuevo que
+supersede a este, no volver a discutir la misma decisión en cada review.
 
 **Cola desde el día uno.** accounts publica un evento y un consumidor manda el mail. Cubriría
 el requisito de cola ya mismo y desacoplaría a accounts del proveedor de correo. Se descarta
