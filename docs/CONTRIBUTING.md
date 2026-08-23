@@ -1,8 +1,8 @@
 # Contributing
 
-How code gets written here, and how it reaches `main`. Read this before opening a pull
-request. It is loaded on demand, not on every turn, so it can afford to be specific — but
-every line still competes with the task, so it stays as short as it can be.
+How code gets written here, and how it reaches `develop` and then `main`. Read this before
+opening a pull request. It is loaded on demand, not on every turn, so it can afford to be
+specific — but every line still competes with the task, so it stays as short as it can be.
 
 ## Principles
 
@@ -88,7 +88,7 @@ Agents over-comment by default. Deleting comments is part of reviewing generated
 
 ### You have to be able to explain it
 
-Everything that reaches `main` has to be explainable by the person whose name is on the pull
+Everything that ships has to be explainable by the person whose name is on the pull
 request. A solution you can explain beats a better one you cannot. The bar is architecture
 and flow — which layer calls which, how a request moves, why the data is shaped that way —
 not line by line.
@@ -99,11 +99,21 @@ If a solution needs an abstraction you would struggle to defend, choose the simp
 
 ### Branches
 
-Trunk-based. `main` is the only long-lived branch. Everything else is `<type>/<slug>` —
-`feat/user-registration`, `fix/jwt-expiry`, `docs/contributing-guide`.
+GitFlow, with two long-lived branches. `main` is production-ready and only ever receives a
+release. `develop` is where the work integrates, and it is the base every branch starts from
+and returns to.
+
+- Work branches are short-lived, cut from `develop`, and named `<type>/<slug>` —
+  `feat/user-registration`, `fix/jwt-expiry`, `docs/contributing-guide`.
+- Work enters `develop` through a pull request. Nothing is pushed to it directly.
+- A release is promoted from `develop` to `main` through its own pull request.
 
 No issue number in the name. The link to the issue is the `Closes #N` in the pull request,
 which is where GitHub already shows it and where nobody has to copy it by hand.
+
+A pull request may be stacked on another that is still open, targeting that branch instead
+of `develop`. Stacked work is integrated in order, bottom first; a stack that has to land in
+one piece is one pull request that was split wrong.
 
 A branch must not outlive the one-week sprint. If a story cannot land in a week it was
 estimated wrong: split it.
@@ -122,7 +132,16 @@ and be revertable without dragging unrelated work with it.
 
 ### Pull requests
 
-Nothing reaches `main` without a pull request approved by someone who is not its author.
+Nothing reaches `develop` without a pull request approved by at least one human who is not
+its author, and nothing reaches `main` without one either.
+
+That approval is against the head that is up for review. **Every new push makes an earlier
+approval stale** and the pull request needs a fresh one — an approval is someone taking
+responsibility for having read the code that merges, not the code that used to be there.
+
+AI may help prepare a branch, write a body, or review a diff, and the findings it produces
+are worth reading. **It never approves and never merges.** There is no responsibility to
+take on the other side of it.
 
 Split a story into pull requests that each deliver something that runs. Cut vertically, never
 by layer: a pull request that adds only a repository delivers nothing anyone can try.
@@ -146,7 +165,7 @@ only copy that survives.
 - [ ] `README.md` still gets the service running from a clean clone.
 - [ ] Every new environment variable is in `.env.template`. No secrets committed.
 - [ ] The board card is in Done and the issue is closed.
-- [ ] Approved by someone other than the author.
+- [ ] Approved by a human other than the author, against the head being merged.
 
 ### Language
 
