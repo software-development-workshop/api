@@ -19,7 +19,7 @@ def normalise_handle(value: str) -> str:
             f"must start with '@' followed by {HANDLE_MIN_LENGTH} to {HANDLE_MAX_LENGTH} "
             "letters, numbers or underscores"
         )
-    return value[1:]
+    return value[1:].lower()
 
 
 def validate_password(value: str) -> str:

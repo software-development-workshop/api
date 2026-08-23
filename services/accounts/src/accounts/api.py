@@ -12,7 +12,8 @@ from accounts.repository import AccountsRepository
 from accounts.service import Mailer, register, resend_verification, verify
 from accounts.validation import normalise_handle, validate_password
 
-router = APIRouter()
+# The version lives on the router, so every route under it moves together when v2 exists.
+router = APIRouter(prefix="/api/v1")
 
 SessionDep = Annotated[Session, Depends(get_session)]
 
@@ -33,6 +34,11 @@ class RegistrationRequest(BaseModel):
     email: EmailStr
     handle: str
     password: str
+
+    @field_validator("email")
+    @classmethod
+    def _normalise_email(cls, value: EmailStr) -> str:
+        return str(value).lower()
 
     @field_validator("handle")
     @classmethod

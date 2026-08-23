@@ -2,15 +2,23 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from accounts.errors import EmailAlreadyRegisteredError, HandleTakenError
 from accounts.models import Account, VerificationToken
 from accounts.repository import AccountsRepository
 
 
 def account(email: str = "juan@udesa.edu.ar", handle: str = "juan") -> Account:
     return Account(email=email, handle=handle, password_hash="$argon2id$stub")
+
+
+def token(account_id: uuid.UUID, digest: str = "a" * 64, hours: int = 24) -> VerificationToken:
+    return VerificationToken(
+        account_id=account_id,
+        token_digest=digest,
+        expires_at=datetime.now(UTC) + timedelta(hours=hours),
+    )
 
 
 def test_persists_an_account_and_stamps_created_at(session: Session) -> None:
@@ -37,30 +45,28 @@ def test_finds_a_handle_whatever_the_casing(session: Session, lookup: str) -> No
     assert repository.exists_with_handle(lookup)
 
 
-def test_database_rejects_a_duplicate_email_whatever_the_casing(session: Session) -> None:
+def test_duplicate_email_is_mapped_and_the_session_is_reusable(session: Session) -> None:
     # AC.7 holds because of this index, not because of the check in the service: two
     # concurrent registrations both pass that check and one of them has to lose here.
     repository = AccountsRepository(session)
     repository.add(account(email="juan@udesa.edu.ar"))
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises(EmailAlreadyRegisteredError):
         repository.add(account(email="JUAN@UDESA.EDU.AR", handle="otro"))
 
+    saved = repository.add(account(email="nuevo@udesa.edu.ar", handle="nuevo"))
+    assert saved.email == "nuevo@udesa.edu.ar"
 
-def test_database_rejects_a_duplicate_handle_whatever_the_casing(session: Session) -> None:
+
+def test_duplicate_handle_is_mapped_and_the_session_is_reusable(session: Session) -> None:
     repository = AccountsRepository(session)
     repository.add(account(handle="juan"))
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises(HandleTakenError):
         repository.add(account(email="otro@udesa.edu.ar", handle="JUAN"))
 
-
-def token(account_id: uuid.UUID, digest: str = "a" * 64, hours: int = 24) -> VerificationToken:
-    return VerificationToken(
-        account_id=account_id,
-        token_digest=digest,
-        expires_at=datetime.now(UTC) + timedelta(hours=hours),
-    )
+    saved = repository.add(account(email="nuevo@udesa.edu.ar", handle="nuevo"))
+    assert saved.handle == "nuevo"
 
 
 def test_stores_a_token_and_finds_it_by_its_digest(session: Session) -> None:
