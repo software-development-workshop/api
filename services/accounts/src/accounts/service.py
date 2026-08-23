@@ -79,12 +79,14 @@ def resend_verification(repository: AccountsRepository, mailer: Mailer, email: s
 
 def _issue_verification(repository: AccountsRepository, mailer: Mailer, account: Account) -> None:
     token = tokens.generate()
-    repository.issue_token(
+    issued = repository.issue_token(
         VerificationToken(
             account_id=account.id,
             token_digest=tokens.digest(token),
             expires_at=datetime.now(UTC) + VERIFICATION_TTL,
         )
     )
+    if issued is None:
+        return
     # Sent only once the replacement is committed, so no link reaches an inbox before it works.
     mailer.send_verification(account.email, token)

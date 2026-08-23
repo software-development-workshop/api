@@ -35,7 +35,10 @@ class FakeAccountsRepository:
     def find_token(self, token_digest: str) -> VerificationToken | None:
         return next((t for t in self.tokens if t.token_digest == token_digest), None)
 
-    def issue_token(self, token: VerificationToken) -> VerificationToken:
+    def issue_token(self, token: VerificationToken) -> VerificationToken | None:
+        account = next(account for account in self.accounts if account.id == token.account_id)
+        if account.verified_at is not None:
+            return None
         for live in self.tokens:
             if live.account_id == token.account_id and live.used_at is None:
                 live.used_at = datetime.now(UTC)

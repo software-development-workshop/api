@@ -168,3 +168,15 @@ def test_resend_stays_silent_for_an_already_verified_account(
     resend_verification(repository, mailer, "juan@udesa.edu.ar")
 
     assert len(mailer.sent) == sent_so_far
+
+
+def test_resend_does_not_send_when_no_replacement_token_was_issued(
+    repository: FakeAccountsRepository, mailer: FakeMailer
+) -> None:
+    sign_up(repository, mailer)
+    sent_so_far = len(mailer.sent)
+    repository.issue_token = lambda _: None  # type: ignore[method-assign]
+
+    resend_verification(repository, mailer, "juan@udesa.edu.ar")
+
+    assert len(mailer.sent) == sent_so_far
