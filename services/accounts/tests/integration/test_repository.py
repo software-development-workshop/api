@@ -1,7 +1,7 @@
 import pytest
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from accounts.errors import EmailAlreadyRegisteredError, HandleTakenError
 from accounts.models import Account
 from accounts.repository import AccountsRepository
 
@@ -34,19 +34,25 @@ def test_finds_a_handle_whatever_the_casing(session: Session, lookup: str) -> No
     assert repository.exists_with_handle(lookup)
 
 
-def test_database_rejects_a_duplicate_email_whatever_the_casing(session: Session) -> None:
+def test_duplicate_email_is_mapped_and_the_session_is_reusable(session: Session) -> None:
     # AC.7 holds because of this index, not because of the check in the service: two
     # concurrent registrations both pass that check and one of them has to lose here.
     repository = AccountsRepository(session)
     repository.add(account(email="juan@udesa.edu.ar"))
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises(EmailAlreadyRegisteredError):
         repository.add(account(email="JUAN@UDESA.EDU.AR", handle="otro"))
 
+    saved = repository.add(account(email="nuevo@udesa.edu.ar", handle="nuevo"))
+    assert saved.email == "nuevo@udesa.edu.ar"
 
-def test_database_rejects_a_duplicate_handle_whatever_the_casing(session: Session) -> None:
+
+def test_duplicate_handle_is_mapped_and_the_session_is_reusable(session: Session) -> None:
     repository = AccountsRepository(session)
     repository.add(account(handle="juan"))
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises(HandleTakenError):
         repository.add(account(email="otro@udesa.edu.ar", handle="JUAN"))
+
+    saved = repository.add(account(email="nuevo@udesa.edu.ar", handle="nuevo"))
+    assert saved.handle == "nuevo"
