@@ -3,9 +3,11 @@ from collections.abc import Iterator
 import pytest
 from fastapi.testclient import TestClient
 
-from accounts.api import get_repository
+from accounts import tokens
+from accounts.api import get_mailer, get_repository
 from accounts.main import app
 from accounts.models import Account
+from tests.fakes import FakeMailer
 from tests.unit.fakes import FakeAccountsRepository
 
 VALID = {"email": "juan@udesa.edu.ar", "handle": "@juan", "password": "Passw0rd"}
@@ -20,7 +22,14 @@ def repository() -> Iterator[FakeAccountsRepository]:
 
 
 @pytest.fixture
-def client(repository: FakeAccountsRepository) -> TestClient:
+def mailer(repository: FakeAccountsRepository) -> FakeMailer:
+    fake = FakeMailer()
+    app.dependency_overrides[get_mailer] = lambda: fake
+    return fake
+
+
+@pytest.fixture
+def client(mailer: FakeMailer) -> TestClient:
     return TestClient(app)
 
 
@@ -31,7 +40,7 @@ def test_registers_and_echoes_the_handle_with_its_at_sign(client: TestClient) ->
     body = response.json()
     assert body["handle"] == "@juan"
     assert body["email"] == "juan@udesa.edu.ar"
-    assert "password" not in body
+    assert body["verified"] is False
 
 
 def test_versioned_registration_route_returns_canonical_identity_values(
@@ -47,8 +56,11 @@ def test_versioned_registration_route_returns_canonical_identity_values(
     assert response.json()["handle"] == "@juan"
 
 
-def test_never_echoes_the_password_hash(client: TestClient) -> None:
-    assert "password_hash" not in client.post("/api/v1/registrations", json=VALID).json()
+def test_never_echoes_the_password_or_its_hash(client: TestClient) -> None:
+    body = client.post("/api/v1/registrations", json=VALID).json()
+
+    assert "password" not in body
+    assert "password_hash" not in body
 
 
 def test_reports_every_invalid_field_in_one_response(client: TestClient) -> None:
@@ -59,8 +71,7 @@ def test_reports_every_invalid_field_in_one_response(client: TestClient) -> None
 
     assert response.status_code == 422
     assert response.headers["content-type"].startswith("application/problem+json")
-    fields = {e["field"] for e in response.json()["errors"]}
-    assert fields == {"email", "handle", "password"}
+    assert {e["field"] for e in response.json()["errors"]} == {"email", "handle", "password"}
 
 
 @pytest.mark.parametrize("missing", ["email", "handle", "password"])
@@ -99,3 +110,52 @@ def test_rejects_a_handle_already_taken(
 
     assert response.status_code == 409
     assert response.json()["type"].endswith("/handle-taken")
+
+
+def test_verification_link_activates_the_account(client: TestClient, mailer: FakeMailer) -> None:
+    client.post("/api/v1/registrations", json=VALID)
+
+    response = client.get(f"/api/v1/verifications/{mailer.last_token}")
+
+    assert response.status_code == 200
+    assert response.json()["verified"] is True
+
+
+def test_verification_link_stops_working_after_it_is_used(
+    client: TestClient, mailer: FakeMailer
+) -> None:
+    client.post("/api/v1/registrations", json=VALID)
+    client.get(f"/api/v1/verifications/{mailer.last_token}")
+
+    response = client.get(f"/api/v1/verifications/{mailer.last_token}")
+
+    assert response.status_code == 400
+    assert response.json()["type"].endswith("/invalid-verification-token")
+
+
+def test_rejects_a_token_nobody_issued(client: TestClient) -> None:
+    assert client.get(f"/api/v1/verifications/{tokens.generate()}").status_code == 400
+
+
+def test_resend_sends_a_fresh_link(client: TestClient, mailer: FakeMailer) -> None:
+    client.post("/api/v1/registrations", json=VALID)
+    first = mailer.last_token
+
+    response = client.post("/api/v1/verifications/resend", json={"email": VALID["email"]})
+
+    assert response.status_code == 202
+    assert mailer.last_token != first
+    assert client.get(f"/api/v1/verifications/{mailer.last_token}").status_code == 200
+
+
+def test_resend_answers_the_same_for_an_unknown_address(
+    client: TestClient, mailer: FakeMailer
+) -> None:
+    # Answering differently would turn this endpoint into a way to find out who has
+    # an account.
+    known = client.post("/api/v1/verifications/resend", json={"email": VALID["email"]})
+    unknown = client.post("/api/v1/verifications/resend", json={"email": "nadie@udesa.edu.ar"})
+
+    assert known.status_code == unknown.status_code == 202
+    assert known.content == unknown.content
+    assert mailer.sent == []
