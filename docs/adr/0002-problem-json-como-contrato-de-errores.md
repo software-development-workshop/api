@@ -7,56 +7,55 @@
 ## Contexto
 
 El sistema va a tener varios microservicios, y el enunciado exige que el backend no sea una
-sola tecnología. La app mobile y el backoffice consumen a todos. Si cada servicio inventa su
-forma de reportar un error, el cliente termina con un parser por servicio, y el que se
-escriba en otro lenguaje va a devolver una tercera forma sin que nadie lo note.
+sola tecnología. La app mobile y el backoffice pueden consumir más de uno. Si cada servicio
+inventa su forma de reportar un error, el cliente termina con un parser por servicio y las
+diferencias entre implementaciones se vuelven errores de integración.
 
-Un contrato de error es de las pocas cosas que tienen que coincidir entre servicios que no
-comparten código. Cuando divergen, el bug aparece en un servicio que nadie tocó: el cliente
-deja de reconocer un error que el backend viene devolviendo igual desde siempre.
-
-Decidirlo con un servicio existiendo cuesta una tarde. Unificar cinco formatos en la semana
-diez cuesta tocar cinco repos y el cliente.
+Un contrato de error es una de las interfaces que tienen que coincidir entre servicios que
+no comparten código. Decidirlo con un servicio existente es más barato que reconciliar varios
+formatos cuando ya hay más clientes e implementaciones.
 
 ## Decisión
 
-**RFC 7807 `application/problem+json`** para toda respuesta de error.
+Usar **Problem Details** con el media type `application/problem+json` para los errores de
+dominio y de validación de requests.
+
+Este incremento aplica el contrato a esos errores. Las respuestas generadas directamente
+por el framework para rutas o métodos inexistentes, como `404` y `405`, quedan fuera de este
+alcance.
 
 ```json
 {
   "type": "https://udesa-x.dev/problems/email-already-registered",
   "title": "Email already registered",
   "status": 409,
-  "detail": "That email is already registered.",
-  "errors": [{ "field": "handle", "message": "..." }]
+  "detail": "That email is already registered."
 }
 ```
 
-`type`, `title`, `status` y `detail` son del estándar. `errors` es una extensión, que el RFC
-habilita explícitamente, y existe porque un formulario que rechaza de a un campo por vez son
-seis viajes: los errores de validación se devuelven todos juntos.
-
-`type` es un identificador, no una URL que alguien vaya a resolver. Que se vea como una URI
-es lo que el estándar pide para que dos servicios no colisionen al elegir el mismo nombre.
+`type`, `title`, `status` y `detail` pertenecen al formato estándar. `errors` es una
+extensión que aparece únicamente en las respuestas de validación `422` para devolver juntos
+los errores de campos. `type` es un identificador estable; los clientes no deben depender de
+que resuelva a una página web.
 
 ## Alternativas consideradas
 
-**Un formato propio mínimo**, del tipo `{error, message, fields}`. Menos ceremonia y más
-fácil de leer. Lo descartamos porque es un contrato inventado: hay que documentarlo y
-replicarlo a mano en cada servicio, y cada uno lo va a escribir un poco distinto. El
-estándar ya viene documentado y tiene implementación en los frameworks de todos los
-lenguajes que podríamos elegir.
+**Un formato propio mínimo**, del tipo `{error, message, fields}`. Es menos ceremonioso y
+más fácil de leer, pero obliga a documentarlo y reproducirlo en cada lenguaje y framework,
+lo que aumenta la posibilidad de divergencias.
 
-**El default de FastAPI.** Cero trabajo hoy. Lo descartamos porque cambia de forma según el
-tipo de error —un fallo de validación de Pydantic y un `HTTPException` no se parecen— así
-que el cliente ya tendría que manejar dos formas antes de que exista el segundo servicio.
+**El default de FastAPI.** No requiere trabajo inicial, pero cambia de forma según el tipo
+de error: una validación de Pydantic y un `HTTPException` no tienen el mismo contrato. El
+cliente tendría que manejar más de una forma antes de que exista el segundo servicio.
 
 ## Consecuencias
 
-- Todo servicio nuevo arranca implementando esto, en el lenguaje que sea. Es la primera cosa
-  que hay que portar y no es negociable, porque el valor del contrato es que sea uno solo.
-- Los handlers de error viven en un módulo aparte (`errors.py`) y las excepciones de dominio
-  cargan su status. El servicio las lanza sin saber que existe HTTP, que es lo que pide la
-  separación de capas.
-- Agregar un error nuevo es agregar una subclase y su slug. Los slugs son parte del contrato
-  público: renombrarlos rompe clientes.
+- Cada nuevo servicio HTTP debe implementar el mismo contrato para sus errores de dominio y
+  validación, en el lenguaje y framework que use.
+- La traducción HTTP vive en un módulo separado. Las excepciones de dominio actuales cargan
+  el status, el slug, el título y el detalle público; el handler serializa esos metadatos sin
+  transformarlos y sin que la capa de servicio importe FastAPI.
+- Agregar un error público implica agregar un identificador estable. Renombrarlo puede
+  romper clientes y requiere revisar el contrato.
+- Los errores de validación incluyen `errors` con nombres de campos y mensajes generados por
+  Pydantic. La respuesta omite los valores enviados.
