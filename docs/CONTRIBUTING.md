@@ -108,8 +108,9 @@ and returns to.
 - Work enters `develop` through a pull request. Nothing is pushed to it directly.
 - A release is promoted from `develop` to `main` through its own pull request.
 
-No issue number in the name. The link to the issue is the `Closes #N` in the pull request,
-which is where GitHub already shows it and where nobody has to copy it by hand.
+No issue number in the name. A pull request that delivers only part of a story references it
+with `Part of #N` or `Refs #N` and leaves the issue open. Only the final pull request that
+completes every acceptance criterion uses `Closes #N` and closes the story.
 
 A pull request may be stacked on another that is still open, targeting that branch instead
 of `develop`. Stacked work is integrated in order, bottom first; a stack that has to land in
@@ -158,13 +159,15 @@ only copy that survives.
 
 ### Definition of done
 
-- [ ] Every acceptance criterion in the issue is met. They are graded individually.
+- [ ] Every acceptance criterion claimed by this pull request is met and graded individually;
+  only the final pull request must cover every criterion in the issue.
 - [ ] CI is green: format, lint, 85% unit coverage, integration tests.
 - [ ] Integration tests cover the new interaction, if it crosses a boundary.
 - [ ] The change was exercised end to end, not only through its tests.
 - [ ] `README.md` still gets the service running from a clean clone.
 - [ ] Every new environment variable is in `.env.template`. No secrets committed.
-- [ ] The board card is in Done and the issue is closed.
+- [ ] A partial pull request leaves the board card and issue open; the final pull request moves
+  the card to Done and closes the issue.
 - [ ] Approved by a human other than the author, against the head being merged.
 
 ### Language
