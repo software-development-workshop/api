@@ -45,6 +45,12 @@ def register(
 
 
 def verify(repository: AccountsRepository, token: str) -> Account:
+    """Activate the account behind a link, spending the link in the process.
+
+    The read decides which error the caller gets; the repository decides whether the link is
+    still there to spend. A link that loses that race is indistinguishable from one that was
+    already used, and gets the same answer.
+    """
     record = repository.find_token(tokens.digest(token))
     if record is None or record.used_at is not None:
         raise InvalidVerificationTokenError("That verification link is not valid.")
@@ -52,7 +58,11 @@ def verify(repository: AccountsRepository, token: str) -> Account:
         raise ExpiredVerificationTokenError(
             "That verification link expired. Ask for a new one from the login screen."
         )
-    return repository.mark_verified(record)
+
+    account = repository.consume_token(record)
+    if account is None:
+        raise InvalidVerificationTokenError("That verification link is not valid.")
+    return account
 
 
 def resend_verification(repository: AccountsRepository, mailer: Mailer, email: str) -> None:
@@ -68,13 +78,13 @@ def resend_verification(repository: AccountsRepository, mailer: Mailer, email: s
 
 
 def _issue_verification(repository: AccountsRepository, mailer: Mailer, account: Account) -> None:
-    repository.invalidate_tokens_for(account.id)
     token = tokens.generate()
-    repository.add_token(
+    repository.issue_token(
         VerificationToken(
             account_id=account.id,
             token_digest=tokens.digest(token),
             expires_at=datetime.now(UTC) + VERIFICATION_TTL,
         )
     )
+    # Sent only once the replacement is committed, so no link reaches an inbox before it works.
     mailer.send_verification(account.email, token)

@@ -111,6 +111,18 @@ def test_a_token_only_works_once(repository: FakeAccountsRepository, mailer: Fak
         verify(repository, mailer.last_token)
 
 
+def test_a_link_that_loses_the_race_is_refused_like_a_used_one(
+    repository: FakeAccountsRepository, mailer: FakeMailer
+) -> None:
+    sign_up(repository, mailer)
+    # Stands in for the request that read the token while it was live and reached the
+    # database after another one had already spent it.
+    repository.consume_token = lambda _: None
+
+    with pytest.raises(InvalidVerificationTokenError):
+        verify(repository, mailer.last_token)
+
+
 def test_rejects_a_token_nobody_issued(repository: FakeAccountsRepository) -> None:
     with pytest.raises(InvalidVerificationTokenError):
         verify(repository, tokens.generate())

@@ -32,20 +32,20 @@ class FakeAccountsRepository:
     def find_by_email(self, email: str) -> Account | None:
         return next((a for a in self.accounts if a.email.lower() == email.lower()), None)
 
-    def add_token(self, token: VerificationToken) -> VerificationToken:
+    def find_token(self, token_digest: str) -> VerificationToken | None:
+        return next((t for t in self.tokens if t.token_digest == token_digest), None)
+
+    def issue_token(self, token: VerificationToken) -> VerificationToken:
+        for live in self.tokens:
+            if live.account_id == token.account_id and live.used_at is None:
+                live.used_at = datetime.now(UTC)
         token.id = token.id or uuid.uuid4()
         self.tokens.append(token)
         return token
 
-    def find_token(self, token_digest: str) -> VerificationToken | None:
-        return next((t for t in self.tokens if t.token_digest == token_digest), None)
-
-    def invalidate_tokens_for(self, account_id: uuid.UUID) -> None:
-        for token in self.tokens:
-            if token.account_id == account_id and token.used_at is None:
-                token.used_at = datetime.now(UTC)
-
-    def mark_verified(self, token: VerificationToken) -> Account:
+    def consume_token(self, token: VerificationToken) -> Account | None:
+        if token.used_at is not None:
+            return None
         now = datetime.now(UTC)
         token.used_at = now
         account = next(a for a in self.accounts if a.id == token.account_id)

@@ -1,4 +1,3 @@
-import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import func, select, update
@@ -41,30 +40,50 @@ class AccountsRepository:
         statement = select(Account).where(func.lower(Account.email) == email.lower())
         return self._session.execute(statement).scalar_one_or_none()
 
-    def add_token(self, token: VerificationToken) -> VerificationToken:
+    def find_token(self, token_digest: str) -> VerificationToken | None:
+        statement = select(VerificationToken).where(VerificationToken.token_digest == token_digest)
+        return self._session.execute(statement).scalar_one_or_none()
+
+    def issue_token(self, token: VerificationToken) -> VerificationToken:
+        """Replace every live token of an account with this one, in a single transaction.
+
+        The account row is locked first. Without it two concurrent resends each invalidate
+        the tokens they can see and then insert their own, and the account ends up with two
+        usable links instead of one.
+        """
+        self._session.execute(
+            select(Account.id).where(Account.id == token.account_id).with_for_update()
+        )
+        self._session.execute(
+            update(VerificationToken)
+            .where(VerificationToken.account_id == token.account_id)
+            .where(VerificationToken.used_at.is_(None))
+            .values(used_at=datetime.now(UTC))
+        )
         self._session.add(token)
         self._session.commit()
         self._session.refresh(token)
         return token
 
-    def find_token(self, token_digest: str) -> VerificationToken | None:
-        statement = select(VerificationToken).where(VerificationToken.token_digest == token_digest)
-        return self._session.execute(statement).scalar_one_or_none()
+    def consume_token(self, token: VerificationToken) -> Account | None:
+        """Spend a token and verify its account, or answer None when it was already spent.
 
-    def invalidate_tokens_for(self, account_id: uuid.UUID) -> None:
-        """Burn every live token of an account, so a resend leaves exactly one usable link."""
-        statement = (
-            update(VerificationToken)
-            .where(VerificationToken.account_id == account_id)
-            .where(VerificationToken.used_at.is_(None))
-            .values(used_at=datetime.now(UTC))
-        )
-        self._session.execute(statement)
-        self._session.commit()
-
-    def mark_verified(self, token: VerificationToken) -> Account:
+        Single use is this conditional update, never the read that precedes it: two requests
+        carrying the same live link both pass that read, and only one of them matches a row
+        here. Verifying the account in the same transaction keeps the two facts from ever
+        disagreeing.
+        """
         now = datetime.now(UTC)
-        token.used_at = now
+        spent = self._session.execute(
+            update(VerificationToken)
+            .where(VerificationToken.id == token.id)
+            .where(VerificationToken.used_at.is_(None))
+            .values(used_at=now)
+        )
+        if spent.rowcount == 0:
+            self._session.rollback()
+            return None
+
         account = self._session.get(Account, token.account_id)
         if account is None:  # pragma: no cover - the foreign key makes this unreachable
             raise LookupError("verification token points at a missing account")

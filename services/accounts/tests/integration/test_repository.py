@@ -73,7 +73,7 @@ def test_stores_a_token_and_finds_it_by_its_digest(session: Session) -> None:
     repository = AccountsRepository(session)
     stored = repository.add(account())
 
-    saved = repository.add_token(token(stored.id))
+    saved = repository.issue_token(token(stored.id))
 
     assert repository.find_token("a" * 64).id == saved.id
 
@@ -89,24 +89,34 @@ def test_finds_an_account_by_email_whatever_the_casing(session: Session) -> None
     assert repository.find_by_email("JUAN@udesa.EDU.ar") is not None
 
 
-def test_invalidating_burns_every_live_token_of_the_account(session: Session) -> None:
+def test_issuing_burns_every_live_token_of_the_account(session: Session) -> None:
     repository = AccountsRepository(session)
     stored = repository.add(account())
-    repository.add_token(token(stored.id, digest="c" * 64))
-    repository.add_token(token(stored.id, digest="d" * 64))
+    repository.issue_token(token(stored.id, digest="c" * 64))
+    repository.issue_token(token(stored.id, digest="d" * 64))
 
-    repository.invalidate_tokens_for(stored.id)
+    repository.issue_token(token(stored.id, digest="e" * 64))
 
     assert repository.find_token("c" * 64).used_at is not None
     assert repository.find_token("d" * 64).used_at is not None
+    assert repository.find_token("e" * 64).used_at is None
 
 
-def test_marking_verified_stamps_the_token_and_the_account(session: Session) -> None:
+def test_consuming_stamps_the_token_and_the_account(session: Session) -> None:
     repository = AccountsRepository(session)
     stored = repository.add(account())
-    saved = repository.add_token(token(stored.id))
+    saved = repository.issue_token(token(stored.id))
 
-    verified = repository.mark_verified(saved)
+    verified = repository.consume_token(saved)
 
     assert verified.verified_at is not None
     assert repository.find_token("a" * 64).used_at is not None
+
+
+def test_consuming_a_spent_token_answers_nothing(session: Session) -> None:
+    repository = AccountsRepository(session)
+    stored = repository.add(account())
+    saved = repository.issue_token(token(stored.id))
+    repository.consume_token(saved)
+
+    assert repository.consume_token(saved) is None
