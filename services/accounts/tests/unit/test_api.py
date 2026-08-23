@@ -1,16 +1,20 @@
 from collections.abc import Iterator
+from types import SimpleNamespace
 
+import jwt
 import pytest
 from fastapi.testclient import TestClient
 
 from accounts import tokens
 from accounts.api import get_mailer, get_repository
+from accounts.config import get_settings
 from accounts.main import app
 from accounts.models import Account
 from tests.fakes import FakeMailer
 from tests.unit.fakes import FakeAccountsRepository
 
 VALID = {"email": "juan@udesa.edu.ar", "handle": "@juan", "password": "Passw0rd"}
+JWT_SECRET = "unit-test-jwt-secret-longer-than-32-bytes"
 
 
 @pytest.fixture
@@ -30,7 +34,13 @@ def mailer(repository: FakeAccountsRepository) -> FakeMailer:
 
 @pytest.fixture
 def client(mailer: FakeMailer) -> TestClient:
+    app.dependency_overrides[get_settings] = lambda: SimpleNamespace(jwt_secret=JWT_SECRET)
     return TestClient(app)
+
+
+def verify_registered_account(client: TestClient, mailer: FakeMailer) -> None:
+    client.post("/api/v1/registrations", json=VALID)
+    client.get(f"/api/v1/verifications/{mailer.last_token}")
 
 
 def test_registers_and_echoes_the_handle_with_its_at_sign(client: TestClient) -> None:
@@ -159,3 +169,97 @@ def test_resend_answers_the_same_for_an_unknown_address(
     assert known.status_code == unknown.status_code == 202
     assert known.content == unknown.content
     assert mailer.sent == []
+
+
+def test_login_issues_a_one_hour_bearer_token(
+    client: TestClient, mailer: FakeMailer, repository: FakeAccountsRepository
+) -> None:
+    verify_registered_account(client, mailer)
+
+    response = client.post(
+        "/api/v1/sessions",
+        json={"identifier": "JUAN@UdeSA.edu.AR", "password": "Passw0rd"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["token_type"] == "bearer"
+    assert body["expires_in"] == 3600
+    claims = jwt.decode(
+        body["access_token"],
+        JWT_SECRET,
+        algorithms=["HS256"],
+        audience="udesa-x",
+        issuer="udesa-x-accounts",
+    )
+    assert claims["sub"] == str(repository.accounts[0].id)
+
+
+def test_login_preserves_spaces_that_are_part_of_the_password(
+    client: TestClient, mailer: FakeMailer
+) -> None:
+    password = " Passw0rd "
+    client.post("/api/v1/registrations", json={**VALID, "password": password})
+    client.get(f"/api/v1/verifications/{mailer.last_token}")
+
+    response = client.post(
+        "/api/v1/sessions",
+        json={"identifier": VALID["email"], "password": password},
+    )
+
+    assert response.status_code == 200
+
+
+def test_login_does_not_reveal_unknown_identity_or_wrong_password(
+    client: TestClient, mailer: FakeMailer
+) -> None:
+    verify_registered_account(client, mailer)
+
+    unknown = client.post(
+        "/api/v1/sessions",
+        json={"identifier": "nadie@udesa.edu.ar", "password": "Wr0ngPassword"},
+    )
+    wrong = client.post(
+        "/api/v1/sessions",
+        json={"identifier": VALID["email"], "password": "Wr0ngPassword"},
+    )
+
+    assert unknown.status_code == wrong.status_code == 401
+    assert unknown.headers["content-type"].startswith("application/problem+json")
+    assert unknown.json() == wrong.json()
+    assert unknown.json()["type"].endswith("/invalid-credentials")
+
+
+def test_login_points_an_unverified_account_to_the_inbox(
+    client: TestClient, mailer: FakeMailer
+) -> None:
+    client.post("/api/v1/registrations", json=VALID)
+
+    response = client.post(
+        "/api/v1/sessions",
+        json={"identifier": "@juan", "password": "Passw0rd"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["type"].endswith("/unverified-account")
+    assert "Check your inbox" in response.json()["detail"]
+
+
+@pytest.mark.parametrize("state", ["suspended", "deleted"])
+def test_login_uses_one_response_for_suspended_and_deleted_accounts(
+    client: TestClient,
+    mailer: FakeMailer,
+    repository: FakeAccountsRepository,
+    state: str,
+) -> None:
+    verify_registered_account(client, mailer)
+    setattr(repository.accounts[0], f"{state}_at", repository.accounts[0].verified_at)
+
+    response = client.post(
+        "/api/v1/sessions",
+        json={"identifier": "juan", "password": "Passw0rd"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["type"].endswith("/suspended-account")
+    assert response.json()["detail"] == "Suspended account."

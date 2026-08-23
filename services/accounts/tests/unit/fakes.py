@@ -32,6 +32,20 @@ class FakeAccountsRepository:
     def find_by_email(self, email: str) -> Account | None:
         return next((a for a in self.accounts if a.email.lower() == email.lower()), None)
 
+    def find_for_login(self, identifier: str) -> Account | None:
+        canonical = identifier.strip().lower()
+        if canonical.startswith("@"):
+            return next(
+                (a for a in self.accounts if a.handle.lower() == canonical.removeprefix("@")),
+                None,
+            )
+        if "@" in canonical:
+            return next((a for a in self.accounts if a.email.lower() == canonical), None)
+        return next((a for a in self.accounts if a.handle.lower() == canonical), None)
+
+    def save(self, account: Account) -> Account:
+        return account
+
     def find_token(self, token_digest: str) -> VerificationToken | None:
         return next((t for t in self.tokens if t.token_digest == token_digest), None)
 

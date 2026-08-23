@@ -89,6 +89,32 @@ def test_finds_an_account_by_email_whatever_the_casing(session: Session) -> None
     assert repository.find_by_email("JUAN@udesa.EDU.ar") is not None
 
 
+@pytest.mark.parametrize(
+    "identifier",
+    ["juan@udesa.edu.ar", "JUAN@UdeSA.edu.AR", "@juan", "@JUAN", "juan"],
+)
+def test_finds_an_account_for_login_by_email_or_handle(session: Session, identifier: str) -> None:
+    repository = AccountsRepository(session)
+    stored = repository.add(account())
+
+    assert repository.find_for_login(identifier).id == stored.id
+
+
+def test_persists_suspended_and_deleted_account_state(session: Session) -> None:
+    repository = AccountsRepository(session)
+    stored = repository.add(account())
+    now = datetime.now(UTC)
+    stored.suspended_at = now
+    stored.deleted_at = now
+
+    repository.save(stored)
+    session.expire_all()
+    reloaded = session.get(Account, stored.id)
+
+    assert reloaded.suspended_at == now
+    assert reloaded.deleted_at == now
+
+
 def test_issuing_burns_every_live_token_of_the_account(session: Session) -> None:
     repository = AccountsRepository(session)
     stored = repository.add(account())

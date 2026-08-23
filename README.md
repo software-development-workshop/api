@@ -40,7 +40,9 @@ docker compose up -d accounts-db
 cd services/accounts
 DB_HOST=localhost DB_PORT=5433 DB_NAME=accounts DB_USER=accounts DB_PASSWORD=accounts \
   SMTP_HOST=localhost SMTP_PORT=1025 SMTP_FROM=no-reply@udesa-x.dev \
-  PUBLIC_BASE_URL=http://localhost:8000 uv run pytest tests/integration
+  PUBLIC_BASE_URL=http://localhost:8000 \
+  JWT_SECRET=integration-test-jwt-secret-32-bytes-minimum \
+  uv run pytest tests/integration
 ```
 
 To run the service against that database, with migrations applied:

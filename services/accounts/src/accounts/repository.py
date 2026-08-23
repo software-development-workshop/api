@@ -40,6 +40,23 @@ class AccountsRepository:
         statement = select(Account).where(func.lower(Account.email) == email.lower())
         return self._session.execute(statement).scalar_one_or_none()
 
+    def find_for_login(self, identifier: str) -> Account | None:
+        canonical = identifier.strip().lower()
+        if canonical.startswith("@"):
+            column = Account.handle
+            canonical = canonical.removeprefix("@")
+        elif "@" in canonical:
+            column = Account.email
+        else:
+            column = Account.handle
+        statement = select(Account).where(func.lower(column) == canonical).with_for_update()
+        return self._session.execute(statement).scalar_one_or_none()
+
+    def save(self, account: Account) -> Account:
+        self._session.commit()
+        self._session.refresh(account)
+        return account
+
     def find_token(self, token_digest: str) -> VerificationToken | None:
         statement = select(VerificationToken).where(VerificationToken.token_digest == token_digest)
         return self._session.execute(statement).scalar_one_or_none()

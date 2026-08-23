@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Both the routes and the link in the verification email hang off this, and they have to
@@ -23,6 +24,8 @@ class Settings(BaseSettings):
     # Where the link in the verification email points. It is the client's address, not this
     # service's: in production a reverse proxy sits in front.
     public_base_url: str
+
+    jwt_secret: str = Field(min_length=32)
 
     @property
     def database_url(self) -> str:

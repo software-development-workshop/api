@@ -21,6 +21,8 @@ class Account(Base):
     handle: Mapped[str] = mapped_column(String(HANDLE_MAX_LENGTH))
     password_hash: Mapped[str] = mapped_column(String(255))
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     # Uniqueness is case-insensitive and the database owns it: a check in the service loses

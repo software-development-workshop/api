@@ -6,10 +6,13 @@ from accounts.errors import (
     EmailAlreadyRegisteredError,
     ExpiredVerificationTokenError,
     HandleTakenError,
+    InvalidCredentialsError,
     InvalidVerificationTokenError,
+    SuspendedAccountError,
+    UnverifiedAccountError,
 )
 from accounts.models import Account, VerificationToken
-from accounts.passwords import hash_password
+from accounts.passwords import hash_password, verify_password
 from accounts.repository import AccountsRepository
 
 VERIFICATION_TTL = timedelta(hours=24)
@@ -17,6 +20,26 @@ VERIFICATION_TTL = timedelta(hours=24)
 
 class Mailer(Protocol):
     def send_verification(self, to: str, token: str) -> None: ...
+
+
+def authenticate(repository: AccountsRepository, identifier: str, password: str) -> Account:
+    account = repository.find_for_login(identifier)
+    password_hash = account.password_hash if account is not None else None
+    if not verify_password(password_hash, password):
+        if account is not None:
+            repository.save(account)
+        raise InvalidCredentialsError("Invalid credentials.")
+
+    if account is None:  # pragma: no cover - verify_password(None, ...) is always false
+        raise InvalidCredentialsError("Invalid credentials.")
+    if account.suspended_at is not None or account.deleted_at is not None:
+        repository.save(account)
+        raise SuspendedAccountError("Suspended account.")
+    if account.verified_at is None:
+        repository.save(account)
+        raise UnverifiedAccountError("Account not verified. Check your inbox.")
+
+    return repository.save(account)
 
 
 def register(
