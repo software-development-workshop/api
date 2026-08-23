@@ -13,6 +13,7 @@ from accounts.service import register, resend_verification, verify
 from tests.fakes import FakeMailer
 
 WORKERS = 2
+THREAD_TIMEOUT_SECONDS = 5
 
 
 def in_parallel(work: Callable[[AccountsRepository, int], object]) -> list[object]:
@@ -34,11 +35,12 @@ def in_parallel(work: Callable[[AccountsRepository, int], object]) -> list[objec
             except Exception as error:
                 results[index] = error
 
-    threads = [threading.Thread(target=run, args=(index,)) for index in range(WORKERS)]
+    threads = [threading.Thread(target=run, args=(index,), daemon=True) for index in range(WORKERS)]
     for thread in threads:
         thread.start()
     for thread in threads:
-        thread.join()
+        thread.join(timeout=THREAD_TIMEOUT_SECONDS)
+    assert all(not thread.is_alive() for thread in threads), "parallel worker did not finish"
     return results
 
 
