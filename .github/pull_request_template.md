@@ -2,7 +2,8 @@
 
 <!-- Qué cambió, en una o dos oraciones. -->
 
-Closes #<issue>
+<!-- Use `Part of #<issue>` or `Refs #<issue>` for a partial increment. Use
+`Closes #<issue>` only for the final pull request that completes the story. -->
 
 ## Por qué
 
@@ -29,11 +30,13 @@ otra persona pueda repetirlo.
 
 ---
 
-- [ ] Se cumplen todos los criterios de aceptación del issue
+- [ ] Se cumplen los criterios de aceptación que reclama este pull request; solo el PR final
+  debe cumplir todos los criterios del issue
 - [ ] Tests agregados, CI en verde, umbral de cobertura pasando
 - [ ] Tests de integración agregados, si el cambio cruza el límite de un servicio
 - [ ] `README.md` sigue levantando el servicio desde un clone limpio
 - [ ] Variables de entorno nuevas agregadas a `.env.template`, sin secretos commiteados
-- [ ] Tarjeta del board movida a In Review
+- [ ] Si es un PR parcial, la tarjeta y el issue quedan abiertos; el PR final mueve la tarjeta a
+  Done y cierra el issue
 - [ ] Tutor agregado como reviewer
 - [ ] Aprobado por alguien que no sea el autor
