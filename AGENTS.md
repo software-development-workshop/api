@@ -87,6 +87,12 @@ knows which.
 
 ## Non-negotiable
 
+- Before reading requirements, reviewing a pull request, or changing files, run
+  `git fetch --prune --no-tags origin` and verify the origin URL, working-tree status, live
+  pull request base/head SHAs, and their merge base. A forced update, missing merge base,
+  unrelated history, or replaced repository is a hard stop: recreate a clean worktree from
+  the current remote and reread the live issue and pull request. Current GitHub state
+  outranks local files, saved context, prior conversations, and archived repositories.
 - You do not open, approve or merge a pull request. You prepare the branch and the body; a
   person decides. Approval is someone taking responsibility for having read the code.
 - No code before a person approves a design. However obvious the change looks.
