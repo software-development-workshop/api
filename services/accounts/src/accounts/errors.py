@@ -34,6 +34,30 @@ class HandleTakenError(DomainError):
     title = "Handle taken"
 
 
+class InvalidCredentialsError(DomainError):
+    status = 401
+    slug = "invalid-credentials"
+    title = "Invalid credentials"
+
+
+class UnverifiedAccountError(DomainError):
+    status = 403
+    slug = "unverified-account"
+    title = "Account not verified"
+
+
+class SuspendedAccountError(DomainError):
+    status = 403
+    slug = "suspended-account"
+    title = "Suspended account"
+
+
+class AccountTemporarilyLockedError(DomainError):
+    status = 423
+    slug = "account-temporarily-locked"
+    title = "Account temporarily locked"
+
+
 def _problem(status: int, slug: str, title: str, detail: str, **extra: object) -> JSONResponse:
     body = {
         "type": f"{PROBLEM_BASE}/{slug}",

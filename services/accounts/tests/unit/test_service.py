@@ -4,15 +4,21 @@ import pytest
 
 from accounts import tokens
 from accounts.errors import (
+    AccountTemporarilyLockedError,
     EmailAlreadyRegisteredError,
     ExpiredVerificationTokenError,
     HandleTakenError,
+    InvalidCredentialsError,
     InvalidVerificationTokenError,
+    SuspendedAccountError,
+    UnverifiedAccountError,
 )
 from accounts.models import Account
-from accounts.service import register, resend_verification, verify
+from accounts.service import authenticate, register, resend_verification, verify
 from tests.fakes import FakeMailer
 from tests.unit.fakes import FakeAccountsRepository
+
+LOGIN_TIME = datetime(2030, 1, 2, 3, 4, 5, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -29,6 +35,12 @@ def sign_up(
     repository: FakeAccountsRepository, mailer: FakeMailer, email: str = "juan@udesa.edu.ar"
 ) -> Account:
     return register(repository, mailer, email, "juan", "Passw0rd")
+
+
+def active_account(repository: FakeAccountsRepository, mailer: FakeMailer) -> Account:
+    account = sign_up(repository, mailer)
+    account.verified_at = datetime.now(UTC)
+    return account
 
 
 def test_stores_the_account_with_a_hashed_password(
@@ -180,3 +192,181 @@ def test_resend_does_not_send_when_no_replacement_token_was_issued(
     resend_verification(repository, mailer, "juan@udesa.edu.ar")
 
     assert len(mailer.sent) == sent_so_far
+
+
+@pytest.mark.parametrize(
+    "identifier",
+    ["juan@udesa.edu.ar", "JUAN@UdeSA.edu.AR", "@juan", "@JUAN", "juan"],
+)
+def test_authenticates_by_email_or_handle(
+    repository: FakeAccountsRepository, mailer: FakeMailer, identifier: str
+) -> None:
+    account = active_account(repository, mailer)
+
+    authenticated = authenticate(repository, identifier, "Passw0rd")
+
+    assert authenticated is account
+
+
+def test_unknown_identity_and_wrong_password_are_indistinguishable(
+    repository: FakeAccountsRepository, mailer: FakeMailer
+) -> None:
+    active_account(repository, mailer)
+
+    with pytest.raises(InvalidCredentialsError) as unknown:
+        authenticate(repository, "nadie@udesa.edu.ar", "Wr0ngPassword")
+    with pytest.raises(InvalidCredentialsError) as wrong:
+        authenticate(repository, "juan@udesa.edu.ar", "Wr0ngPassword")
+
+    assert unknown.value.detail == wrong.value.detail == "Invalid credentials."
+
+
+def test_unknown_identity_and_wrong_password_complete_the_same_login_lifecycle(
+    repository: FakeAccountsRepository, mailer: FakeMailer
+) -> None:
+    active_account(repository, mailer)
+
+    for identifier in ["nadie@udesa.edu.ar", "juan@udesa.edu.ar"]:
+        with pytest.raises(InvalidCredentialsError):
+            authenticate(repository, identifier, "Wr0ngPassword")
+
+    assert repository.completed_login_attempts == 2
+
+
+def test_a_malformed_stored_hash_is_an_invalid_credential(
+    repository: FakeAccountsRepository, mailer: FakeMailer
+) -> None:
+    account = active_account(repository, mailer)
+    account.password_hash = "not-an-argon2-hash"
+
+    with pytest.raises(InvalidCredentialsError, match="Invalid credentials"):
+        authenticate(repository, account.email, "Passw0rd", now=LOGIN_TIME)
+
+    assert account.failed_login_attempts == 1
+
+
+@pytest.mark.parametrize("state", ["unverified", "suspended", "deleted"])
+def test_a_wrong_password_never_reveals_account_state(
+    repository: FakeAccountsRepository, mailer: FakeMailer, state: str
+) -> None:
+    account = sign_up(repository, mailer)
+    if state != "unverified":
+        account.verified_at = datetime.now(UTC)
+    if state == "suspended":
+        account.suspended_at = datetime.now(UTC)
+    if state == "deleted":
+        account.deleted_at = datetime.now(UTC)
+
+    with pytest.raises(InvalidCredentialsError, match="Invalid credentials"):
+        authenticate(repository, account.email, "Wr0ngPassword")
+
+
+def test_correct_credentials_for_an_unverified_account_point_to_the_inbox(
+    repository: FakeAccountsRepository, mailer: FakeMailer
+) -> None:
+    account = sign_up(repository, mailer)
+
+    with pytest.raises(UnverifiedAccountError, match="Check your inbox"):
+        authenticate(repository, account.email, "Passw0rd")
+
+
+@pytest.mark.parametrize("state", ["suspended", "deleted"])
+def test_correct_credentials_for_an_unusable_account_share_one_error(
+    repository: FakeAccountsRepository, mailer: FakeMailer, state: str
+) -> None:
+    account = active_account(repository, mailer)
+    setattr(account, f"{state}_at", datetime.now(UTC))
+
+    with pytest.raises(SuspendedAccountError, match="Suspended account"):
+        authenticate(repository, account.email, "Passw0rd")
+
+
+def test_the_fifth_consecutive_wrong_password_locks_for_fifteen_minutes(
+    repository: FakeAccountsRepository, mailer: FakeMailer
+) -> None:
+    account = active_account(repository, mailer)
+
+    for _ in range(5):
+        with pytest.raises(InvalidCredentialsError, match="Invalid credentials"):
+            authenticate(repository, account.email, "Wr0ngPassword", now=LOGIN_TIME)
+
+    assert account.failed_login_attempts == 5
+    assert account.locked_until == LOGIN_TIME + timedelta(minutes=15)
+
+
+def test_correct_password_is_refused_while_the_lock_is_active(
+    repository: FakeAccountsRepository, mailer: FakeMailer
+) -> None:
+    account = active_account(repository, mailer)
+    account.failed_login_attempts = 5
+    account.locked_until = LOGIN_TIME + timedelta(minutes=15)
+
+    with pytest.raises(AccountTemporarilyLockedError, match="temporarily locked"):
+        authenticate(repository, account.email, "Passw0rd", now=LOGIN_TIME)
+
+
+def test_wrong_password_remains_generic_while_the_lock_is_active(
+    repository: FakeAccountsRepository, mailer: FakeMailer
+) -> None:
+    account = active_account(repository, mailer)
+    account.failed_login_attempts = 5
+    account.locked_until = LOGIN_TIME + timedelta(minutes=15)
+
+    with pytest.raises(InvalidCredentialsError, match="Invalid credentials"):
+        authenticate(repository, account.email, "Wr0ngPassword", now=LOGIN_TIME)
+
+    assert account.failed_login_attempts == 5
+    assert account.locked_until == LOGIN_TIME + timedelta(minutes=15)
+
+
+def test_an_expired_lock_allows_the_correct_password(
+    repository: FakeAccountsRepository, mailer: FakeMailer
+) -> None:
+    account = active_account(repository, mailer)
+    account.failed_login_attempts = 5
+    account.locked_until = LOGIN_TIME
+
+    authenticated = authenticate(
+        repository,
+        account.email,
+        "Passw0rd",
+        now=LOGIN_TIME + timedelta(seconds=1),
+    )
+
+    assert authenticated is account
+    assert account.failed_login_attempts == 0
+    assert account.locked_until is None
+
+
+def test_a_wrong_password_after_an_expired_lock_starts_a_new_streak(
+    repository: FakeAccountsRepository, mailer: FakeMailer
+) -> None:
+    account = active_account(repository, mailer)
+    account.failed_login_attempts = 5
+    account.locked_until = LOGIN_TIME
+
+    with pytest.raises(InvalidCredentialsError):
+        authenticate(
+            repository,
+            account.email,
+            "Wr0ngPassword",
+            now=LOGIN_TIME + timedelta(seconds=1),
+        )
+
+    assert account.failed_login_attempts == 1
+    assert account.locked_until is None
+
+
+def test_a_correct_password_breaks_the_failure_streak(
+    repository: FakeAccountsRepository, mailer: FakeMailer
+) -> None:
+    account = active_account(repository, mailer)
+    with pytest.raises(InvalidCredentialsError):
+        authenticate(repository, account.email, "Wr0ngPassword", now=LOGIN_TIME)
+
+    authenticate(repository, account.email, "Passw0rd", now=LOGIN_TIME)
+    with pytest.raises(InvalidCredentialsError):
+        authenticate(repository, account.email, "Wr0ngPassword", now=LOGIN_TIME)
+
+    assert account.failed_login_attempts == 1
+    assert account.locked_until is None

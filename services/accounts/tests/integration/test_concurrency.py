@@ -1,30 +1,35 @@
 import threading
+import time
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from accounts import tokens
 from accounts.db import get_engine
-from accounts.errors import InvalidVerificationTokenError
+from accounts.errors import InvalidCredentialsError, InvalidVerificationTokenError
 from accounts.models import Account, VerificationToken
 from accounts.repository import AccountsRepository
-from accounts.service import register, resend_verification, verify
+from accounts.service import authenticate, register, resend_verification, verify
 from tests.fakes import FakeMailer
 
 WORKERS = 2
 THREAD_TIMEOUT_SECONDS = 5
 
 
-def in_parallel(work: Callable[[AccountsRepository, int], object]) -> list[object]:
+def in_parallel(
+    work: Callable[[AccountsRepository, int], object], workers: int = WORKERS
+) -> list[object]:
     """Run `work` on its own session in every worker, all released at the same instant.
 
     The barrier is what makes these tests worth running: without it the threads queue up
     behind each other and the second one only ever sees the first one's committed result,
     which is the sequential case the other integration tests already cover.
     """
-    barrier = threading.Barrier(WORKERS)
-    results: list[object] = [None] * WORKERS
+    barrier = threading.Barrier(workers)
+    results: list[object] = [None] * workers
 
     def run(index: int) -> None:
         with Session(get_engine()) as session:
@@ -35,7 +40,7 @@ def in_parallel(work: Callable[[AccountsRepository, int], object]) -> list[objec
             except Exception as error:
                 results[index] = error
 
-    threads = [threading.Thread(target=run, args=(index,), daemon=True) for index in range(WORKERS)]
+    threads = [threading.Thread(target=run, args=(index,), daemon=True) for index in range(workers)]
     for thread in threads:
         thread.start()
     for thread in threads:
@@ -142,3 +147,184 @@ def test_verify_and_resend_race_has_no_deadlock_or_live_token_after_verification
             assert live == []
         else:
             assert len(live) == 1
+
+
+def test_five_simultaneous_wrong_passwords_lock_the_account(
+    session: Session, mailer: FakeMailer
+) -> None:
+    repository = sign_up(session, mailer)
+    verify(repository, mailer.last_token)
+    identifiers = [
+        "juan@udesa.edu.ar",
+        "JUAN@UdeSA.edu.AR",
+        "@juan",
+        "@JUAN",
+        "juan",
+    ]
+
+    results = in_parallel(
+        lambda concurrent_repository, index: authenticate(
+            concurrent_repository, identifiers[index], "Wr0ngPassword"
+        ),
+        workers=len(identifiers),
+    )
+
+    assert all(isinstance(result, InvalidCredentialsError) for result in results)
+    session.rollback()
+    stored = session.execute(
+        select(Account).where(Account.email == "juan@udesa.edu.ar")
+    ).scalar_one()
+    assert stored.failed_login_attempts == 5
+    assert stored.locked_until is not None
+
+
+def test_email_and_handle_lookups_contend_on_the_same_account_row(
+    session: Session, mailer: FakeMailer
+) -> None:
+    repository = sign_up(session, mailer)
+    verify(repository, mailer.last_token)
+
+    with Session(get_engine()) as blocker:
+        assert AccountsRepository(blocker).find_for_login("juan@udesa.edu.ar") is not None
+        started = threading.Event()
+        finished = threading.Event()
+        errors: list[Exception] = []
+
+        def handle_lookup() -> None:
+            with Session(get_engine()) as concurrent_session:
+                started.set()
+                try:
+                    AccountsRepository(concurrent_session).find_for_login("@juan")
+                except Exception as error:
+                    errors.append(error)
+                finally:
+                    finished.set()
+
+        worker = threading.Thread(target=handle_lookup, daemon=True)
+        worker.start()
+        assert started.wait(timeout=1)
+        assert not finished.wait(timeout=0.2)
+        blocker.rollback()
+        worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert finished.is_set()
+    assert errors == []
+
+
+def test_lock_ttl_starts_after_waiting_for_the_account_row(
+    session: Session, mailer: FakeMailer
+) -> None:
+    repository = sign_up(session, mailer)
+    verify(repository, mailer.last_token)
+    for _ in range(4):
+        with pytest.raises(InvalidCredentialsError):
+            authenticate(repository, "juan@udesa.edu.ar", "Wr0ngPassword")
+
+    with Session(get_engine()) as blocker:
+        blocker.execute(
+            select(Account).where(Account.email == "juan@udesa.edu.ar").with_for_update()
+        ).scalar_one()
+        started = threading.Event()
+        result: list[object] = []
+
+        def fifth_failure() -> None:
+            with Session(get_engine()) as concurrent_session:
+                started.set()
+                try:
+                    authenticate(
+                        AccountsRepository(concurrent_session),
+                        "juan@udesa.edu.ar",
+                        "Wr0ngPassword",
+                    )
+                except Exception as error:
+                    result.append(error)
+
+        worker = threading.Thread(target=fifth_failure, daemon=True)
+        worker.start()
+        assert started.wait(timeout=1)
+        time.sleep(0.75)
+        released_at = datetime.now(UTC)
+        blocker.rollback()
+        worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert len(result) == 1
+    assert isinstance(result[0], InvalidCredentialsError)
+    session.rollback()
+    stored = session.execute(
+        select(Account).where(Account.email == "juan@udesa.edu.ar")
+    ).scalar_one()
+    assert stored.locked_until is not None
+    assert stored.locked_until >= released_at + timedelta(minutes=15, seconds=-0.2)
+
+
+@pytest.mark.parametrize(
+    ("first_identifier", "second_identifier"),
+    [
+        ("NADIE@UdeSA.edu.ar", "nadie@udesa.edu.ar"),
+        ("@Nadie", "nadie"),
+    ],
+)
+def test_unknown_login_identifiers_are_serialized(
+    first_identifier: str, second_identifier: str
+) -> None:
+    with Session(get_engine()) as blocker:
+        assert AccountsRepository(blocker).find_for_login(first_identifier) is None
+        started = threading.Event()
+        finished = threading.Event()
+
+        def same_identifier_lookup() -> None:
+            with Session(get_engine()) as concurrent_session:
+                started.set()
+                AccountsRepository(concurrent_session).find_for_login(second_identifier)
+                finished.set()
+
+        worker = threading.Thread(target=same_identifier_lookup, daemon=True)
+        worker.start()
+        assert started.wait(timeout=1)
+        assert not finished.wait(timeout=0.2)
+        blocker.rollback()
+        worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert finished.is_set()
+
+
+def test_unknown_login_releases_its_advisory_lock_before_session_close() -> None:
+    with Session(get_engine()) as first_session:
+        with pytest.raises(InvalidCredentialsError):
+            authenticate(
+                AccountsRepository(first_session),
+                "nadie@udesa.edu.ar",
+                "Wr0ngPassword",
+            )
+        assert not first_session.in_transaction()
+
+        finished = threading.Event()
+        result: list[object] = []
+
+        def same_identifier_attempt() -> None:
+            with Session(get_engine()) as concurrent_session:
+                try:
+                    authenticate(
+                        AccountsRepository(concurrent_session),
+                        "NADIE@UdeSA.edu.ar",
+                        "Wr0ngPassword",
+                    )
+                except Exception as error:
+                    result.append(error)
+                finally:
+                    finished.set()
+
+        worker = threading.Thread(target=same_identifier_attempt, daemon=True)
+        worker.start()
+        completed_before_session_close = finished.wait(timeout=2)
+        if not completed_before_session_close:
+            first_session.rollback()
+        worker.join(timeout=2)
+
+    assert completed_before_session_close
+    assert not worker.is_alive()
+    assert len(result) == 1
+    assert isinstance(result[0], InvalidCredentialsError)
