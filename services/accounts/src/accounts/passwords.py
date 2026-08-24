@@ -8,7 +8,7 @@ _logger = logging.getLogger(__name__)
 
 # OWASP Password Storage Cheat Sheet, argon2id: 19 MiB of memory, 2 iterations, 1 degree of
 # parallelism. Argon2 encodes its parameters in the hash, so raising these later leaves every
-# existing hash verifiable.
+# existing hash verifiable after a coordinated policy migration.
 _hasher = PasswordHasher(memory_cost=19456, time_cost=2, parallelism=1)
 _dummy_hash = _hasher.hash("DummyPassw0rd")
 _SUPPORTED_HASH_PATTERN = re.compile(
@@ -20,10 +20,14 @@ def hash_password(password: str) -> str:
     return _hasher.hash(password)
 
 
-def verify_password(password_hash: str | None, candidate: str) -> bool:
-    hash_is_usable = (
+def _is_supported_hash(password_hash: str | None) -> bool:
+    return (
         password_hash is not None and _SUPPORTED_HASH_PATTERN.fullmatch(password_hash) is not None
     )
+
+
+def verify_password(password_hash: str | None, candidate: str) -> bool:
+    hash_is_usable = _is_supported_hash(password_hash)
     if password_hash is not None and not hash_is_usable:
         _logger.warning("Stored password hash uses an invalid or unsupported format.")
     try:

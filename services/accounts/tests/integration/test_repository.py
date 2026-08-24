@@ -2,6 +2,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from argon2 import PasswordHasher
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -11,6 +12,11 @@ from accounts.passwords import hash_password
 from accounts.repository import AccountsRepository
 
 VALID_PASSWORD_HASH = hash_password("Passw0rd")
+NONCANONICAL_STRONGER_HASH = PasswordHasher(
+    memory_cost=32768,
+    time_cost=3,
+    parallelism=2,
+).hash("Passw0rd")
 
 
 def account(email: str = "juan@udesa.edu.ar", handle: str = "juan") -> Account:
@@ -31,6 +37,14 @@ def test_persists_an_account_and_stamps_created_at(session: Session) -> None:
     assert stored.id is not None
     assert stored.created_at is not None
     assert stored.verified_at is None
+
+
+def test_rejects_noncanonical_stronger_password_hash_parameters(session: Session) -> None:
+    stronger_account = account()
+    stronger_account.password_hash = NONCANONICAL_STRONGER_HASH
+
+    with pytest.raises(IntegrityError):
+        AccountsRepository(session).add(stronger_account)
 
 
 @pytest.mark.parametrize("lookup", ["juan@udesa.edu.ar", "JUAN@UdeSA.EDU.ar"])
@@ -148,8 +162,12 @@ def test_persists_login_lockout_state(session: Session) -> None:
         "é",
         "$argon2id$stub",
         f"{VALID_PASSWORD_HASH}trailing",
+        VALID_PASSWORD_HASH.replace("m=19456", "m=01024"),
+        VALID_PASSWORD_HASH.replace("m=19456", "m=65537"),
         VALID_PASSWORD_HASH.replace("m=19456", "m=999999"),
+        VALID_PASSWORD_HASH.replace("t=2", "t=5"),
         VALID_PASSWORD_HASH.replace("t=2", "t=999"),
+        VALID_PASSWORD_HASH.replace("p=1", "p=5"),
         VALID_PASSWORD_HASH.replace("p=1", "p=99"),
         VALID_PASSWORD_HASH.replace("m=19456", "m=invalid"),
         VALID_PASSWORD_HASH.replace("$argon2id$", "$argon2i$"),

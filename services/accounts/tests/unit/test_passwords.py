@@ -1,5 +1,5 @@
 import pytest
-from argon2 import PasswordHasher
+from argon2 import PasswordHasher, extract_parameters
 from argon2.exceptions import InvalidHashError
 
 from accounts import passwords
@@ -28,6 +28,41 @@ def test_verifies_the_original_password() -> None:
     password_hash = hash_password("Passw0rd")
 
     assert verify_password(password_hash, "Passw0rd") is True
+
+
+def test_rejects_a_hash_with_noncanonical_stronger_parameters() -> None:
+    password_hash = PasswordHasher(
+        memory_cost=32768,
+        time_cost=3,
+        parallelism=2,
+    ).hash("Passw0rd")
+
+    assert verify_password(password_hash, "Passw0rd") is False
+
+
+def test_every_login_path_uses_the_canonical_argon2_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canonical_hash = hash_password("Passw0rd")
+    stronger_hash = PasswordHasher(
+        memory_cost=32768,
+        time_cost=3,
+        parallelism=2,
+    ).hash("Passw0rd")
+    profiles: list[object] = []
+
+    class SpyHasher:
+        def verify(self, password_hash: str, candidate: str) -> bool:
+            profiles.append(extract_parameters(password_hash))
+            return False
+
+    monkeypatch.setattr(passwords, "_hasher", SpyHasher())
+
+    passwords.verify_password(None, "Passw0rd")
+    passwords.verify_password(canonical_hash, "Passw0rd")
+    passwords.verify_password(stronger_hash, "Passw0rd")
+
+    assert profiles[0] == profiles[1] == profiles[2]
 
 
 def test_rejects_a_different_password() -> None:
@@ -80,10 +115,22 @@ def test_malformed_hash_still_performs_dummy_argon2_work(
     assert calls == [malformed_hash, "dummy"]
 
 
-def test_rejects_excessive_cost_before_argon2_verification(
+@pytest.mark.parametrize(
+    ("current", "unsupported"),
+    [
+        ("m=19456", "m=01024"),
+        ("m=19456", "m=65537"),
+        ("m=19456", "m=999999"),
+        ("t=2", "t=5"),
+        ("p=1", "p=5"),
+    ],
+)
+def test_rejects_unsupported_parameters_before_argon2_verification(
     monkeypatch: pytest.MonkeyPatch,
+    current: str,
+    unsupported: str,
 ) -> None:
-    excessive_hash = hash_password("Passw0rd").replace("m=19456", "m=999999")
+    unsupported_hash = hash_password("Passw0rd").replace(current, unsupported)
     calls: list[str] = []
 
     class SpyHasher:
@@ -94,5 +141,5 @@ def test_rejects_excessive_cost_before_argon2_verification(
     monkeypatch.setattr(passwords, "_hasher", SpyHasher())
     monkeypatch.setattr(passwords, "_dummy_hash", "dummy")
 
-    assert passwords.verify_password(excessive_hash, "Passw0rd") is False
+    assert passwords.verify_password(unsupported_hash, "Passw0rd") is False
     assert calls == ["dummy"]
