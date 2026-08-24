@@ -55,7 +55,7 @@ Work that is not on it does not exist.
 | Ready | committed for this iteration |
 | In progress | someone is working on it, and that someone is the assignee |
 | In review | the pull request is open |
-| Done | the pull request is merged |
+| Done | the final pull request is merged and the story is complete |
 
 Cards also carry `Optional/Mandatory` — every mandatory story has to ship, optional ones earn
 points — plus a `Size` from XS to XL and an `Iteration`.
