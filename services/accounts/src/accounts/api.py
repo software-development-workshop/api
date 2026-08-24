@@ -2,6 +2,7 @@ import uuid
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Response, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr, StringConstraints, field_validator
 from sqlalchemy.orm import Session
 
@@ -11,7 +12,14 @@ from accounts.db import get_session
 from accounts.email import SmtpMailer
 from accounts.models import Account
 from accounts.repository import AccountsRepository
-from accounts.service import Mailer, authenticate, register, resend_verification, verify
+from accounts.service import (
+    Mailer,
+    authenticate,
+    register,
+    resend_verification,
+    revoke_access_token,
+    verify,
+)
 from accounts.validation import normalise_handle, validate_password
 
 router = APIRouter(prefix=API_PREFIX)
@@ -30,6 +38,10 @@ def get_mailer() -> Mailer:
 RepositoryDep = Annotated[AccountsRepository, Depends(get_repository)]
 MailerDep = Annotated[Mailer, Depends(get_mailer)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
+BearerDep = Annotated[
+    HTTPAuthorizationCredentials | None,
+    Depends(HTTPBearer(auto_error=False)),
+]
 
 Identifier = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=254)]
 Password = Annotated[str, StringConstraints(min_length=1, max_length=128)]
@@ -112,3 +124,10 @@ def create_session(
     account = authenticate(repository, body.identifier, body.password)
     issued = access_tokens.issue(account.id, settings.jwt_secret)
     return SessionResponse(access_token=issued.token, expires_in=issued.expires_in)
+
+
+@router.post("/sessions/logout", status_code=status.HTTP_204_NO_CONTENT)
+def logout(credentials: BearerDep, repository: RepositoryDep, settings: SettingsDep) -> Response:
+    token = credentials.credentials if credentials is not None else None
+    revoke_access_token(repository, token, settings.jwt_secret)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

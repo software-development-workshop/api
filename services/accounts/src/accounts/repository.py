@@ -1,12 +1,14 @@
+import uuid
 from datetime import UTC, datetime
 from hashlib import sha256
 
 from sqlalchemy import func, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from accounts.errors import EmailAlreadyRegisteredError, HandleTakenError
-from accounts.models import Account, VerificationToken
+from accounts.models import Account, RevokedAccessToken, VerificationToken
 
 _EMAIL_UNIQUE_INDEX = "ix_accounts_email_lower"
 _HANDLE_UNIQUE_INDEX = "ix_accounts_handle_lower"
@@ -70,6 +72,17 @@ class AccountsRepository:
     def finish_login_attempt(self, account: Account | None) -> Account | None:
         self._session.commit()
         return account
+
+    def revoke_access_token(self, jti: uuid.UUID, expires_at: datetime) -> None:
+        statement = pg_insert(RevokedAccessToken).values(jti=jti, expires_at=expires_at)
+        self._session.execute(
+            statement.on_conflict_do_nothing(index_elements=[RevokedAccessToken.jti])
+        )
+        self._session.commit()
+
+    def is_access_token_revoked(self, jti: uuid.UUID) -> bool:
+        statement = select(RevokedAccessToken.jti).where(RevokedAccessToken.jti == jti)
+        return self._session.execute(statement).scalar_one_or_none() is not None
 
     def find_token(self, token_digest: str) -> VerificationToken | None:
         statement = select(VerificationToken).where(VerificationToken.token_digest == token_digest)

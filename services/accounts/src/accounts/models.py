@@ -44,6 +44,14 @@ class Account(Base):
     )
 
 
+class RevokedAccessToken(Base):
+    __tablename__ = "revoked_access_tokens"
+
+    jti: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class VerificationToken(Base):
     __tablename__ = "verification_tokens"
 

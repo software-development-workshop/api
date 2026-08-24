@@ -313,3 +313,49 @@ def test_non_ascii_stored_hash_stays_generic_and_counts_toward_lockout(
     }
     assert account.failed_login_attempts == 5
     assert account.locked_until is not None
+
+
+def test_logout_revokes_the_bearer_access_token(
+    client: TestClient, mailer: FakeMailer, repository: FakeAccountsRepository
+) -> None:
+    verify_registered_account(client, mailer)
+    login = client.post(
+        "/api/v1/sessions",
+        json={"identifier": VALID["email"], "password": VALID["password"]},
+    )
+
+    response = client.post(
+        "/api/v1/sessions/logout",
+        headers={"Authorization": f"Bearer {login.json()['access_token']}"},
+    )
+
+    assert response.status_code == 204
+    assert len(repository.revoked_access_tokens) == 1
+
+
+def test_logout_is_idempotent_for_a_previously_revoked_token(
+    client: TestClient, mailer: FakeMailer, repository: FakeAccountsRepository
+) -> None:
+    verify_registered_account(client, mailer)
+    login = client.post(
+        "/api/v1/sessions",
+        json={"identifier": VALID["email"], "password": VALID["password"]},
+    )
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    assert client.post("/api/v1/sessions/logout", headers=headers).status_code == 204
+    repeated = client.post("/api/v1/sessions/logout", headers=headers)
+
+    assert repeated.status_code == 204
+    assert len(repository.revoked_access_tokens) == 1
+
+
+@pytest.mark.parametrize("headers", [{}, {"Authorization": "Bearer malformed"}])
+def test_logout_rejects_a_missing_or_invalid_bearer_token(
+    client: TestClient, headers: dict[str, str]
+) -> None:
+    response = client.post("/api/v1/sessions/logout", headers=headers)
+
+    assert response.status_code == 401
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert response.json()["type"].endswith("/invalid-access-token")

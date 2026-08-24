@@ -1,12 +1,13 @@
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
-from accounts import tokens
+from accounts import access_tokens, tokens
 from accounts.errors import (
     AccountTemporarilyLockedError,
     EmailAlreadyRegisteredError,
     ExpiredVerificationTokenError,
     HandleTakenError,
+    InvalidAccessTokenError,
     InvalidCredentialsError,
     InvalidVerificationTokenError,
     SuspendedAccountError,
@@ -23,6 +24,28 @@ LOGIN_LOCK_TTL = timedelta(minutes=15)
 
 class Mailer(Protocol):
     def send_verification(self, to: str, token: str) -> None: ...
+
+
+def revoke_access_token(repository: AccountsRepository, token: str | None, secret: str) -> None:
+    if token is None:
+        raise InvalidAccessTokenError("Invalid access token.")
+    try:
+        claims = access_tokens.decode(token, secret)
+    except access_tokens.InvalidAccessTokenError as error:
+        raise InvalidAccessTokenError("Invalid access token.") from error
+    repository.revoke_access_token(claims.jti, claims.expires_at)
+
+
+def validate_access_token(
+    repository: AccountsRepository, token: str, secret: str
+) -> access_tokens.AccessTokenClaims:
+    try:
+        claims = access_tokens.decode(token, secret)
+    except access_tokens.InvalidAccessTokenError as error:
+        raise InvalidAccessTokenError("Invalid access token.") from error
+    if repository.is_access_token_revoked(claims.jti):
+        raise InvalidAccessTokenError("Invalid access token.")
+    return claims
 
 
 def authenticate(
