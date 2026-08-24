@@ -1,0 +1,133 @@
+import uuid
+from typing import Annotated, Literal
+
+from fastapi import APIRouter, Depends, Response, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel, EmailStr, StringConstraints, field_validator
+from sqlalchemy.orm import Session
+
+from accounts import access_tokens
+from accounts.config import API_PREFIX, Settings, get_settings
+from accounts.db import get_session
+from accounts.email import SmtpMailer
+from accounts.models import Account
+from accounts.repository import AccountsRepository
+from accounts.service import (
+    Mailer,
+    authenticate,
+    register,
+    resend_verification,
+    revoke_access_token,
+    verify,
+)
+from accounts.validation import normalise_handle, validate_password
+
+router = APIRouter(prefix=API_PREFIX)
+
+SessionDep = Annotated[Session, Depends(get_session)]
+
+
+def get_repository(session: SessionDep) -> AccountsRepository:
+    return AccountsRepository(session)
+
+
+def get_mailer() -> Mailer:
+    return SmtpMailer()
+
+
+RepositoryDep = Annotated[AccountsRepository, Depends(get_repository)]
+MailerDep = Annotated[Mailer, Depends(get_mailer)]
+SettingsDep = Annotated[Settings, Depends(get_settings)]
+BearerDep = Annotated[
+    HTTPAuthorizationCredentials | None,
+    Depends(HTTPBearer(auto_error=False)),
+]
+
+Identifier = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=254)]
+Password = Annotated[str, StringConstraints(min_length=1, max_length=128)]
+
+
+class RegistrationRequest(BaseModel):
+    email: EmailStr
+    handle: str
+    password: str
+
+    @field_validator("email")
+    @classmethod
+    def _normalise_email(cls, value: EmailStr) -> str:
+        return str(value).lower()
+
+    @field_validator("handle")
+    @classmethod
+    def _check_handle(cls, value: str) -> str:
+        return normalise_handle(value)
+
+    @field_validator("password")
+    @classmethod
+    def _check_password(cls, value: str) -> str:
+        return validate_password(value)
+
+
+class ResendRequest(BaseModel):
+    email: EmailStr
+
+
+class SessionRequest(BaseModel):
+    identifier: Identifier
+    password: Password
+
+
+class SessionResponse(BaseModel):
+    access_token: str
+    token_type: Literal["bearer"] = "bearer"  # noqa: S105
+    expires_in: int
+
+
+class AccountResponse(BaseModel):
+    id: uuid.UUID
+    email: str
+    handle: str
+    verified: bool
+
+
+def _as_response(account: Account) -> AccountResponse:
+    return AccountResponse(
+        id=account.id,
+        email=account.email,
+        handle=f"@{account.handle}",
+        verified=account.verified_at is not None,
+    )
+
+
+@router.post("/registrations", status_code=status.HTTP_201_CREATED)
+def register_account(
+    body: RegistrationRequest, repository: RepositoryDep, mailer: MailerDep
+) -> AccountResponse:
+    return _as_response(register(repository, mailer, body.email, body.handle, body.password))
+
+
+@router.get("/verifications/{token}")
+def verify_account(token: str, repository: RepositoryDep) -> AccountResponse:
+    return _as_response(verify(repository, token))
+
+
+@router.post("/verifications/resend", status_code=status.HTTP_202_ACCEPTED)
+def resend(body: ResendRequest, repository: RepositoryDep, mailer: MailerDep) -> Response:
+    resend_verification(repository, mailer, body.email)
+    return Response(status_code=status.HTTP_202_ACCEPTED)
+
+
+@router.post("/sessions")
+def create_session(
+    body: SessionRequest, repository: RepositoryDep, settings: SettingsDep
+) -> SessionResponse:
+    account = authenticate(repository, body.identifier, body.password)
+    issued = access_tokens.issue(account.id, settings.jwt_secret)
+    return SessionResponse(access_token=issued.token, expires_in=issued.expires_in)
+
+
+@router.post("/sessions/logout", status_code=status.HTTP_204_NO_CONTENT)
+def logout(credentials: BearerDep, repository: RepositoryDep, settings: SettingsDep) -> Response:
+    token = credentials.credentials if credentials is not None else None
+    revoke_access_token(repository, token, settings.jwt_secret)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
