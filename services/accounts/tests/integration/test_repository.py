@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from accounts.errors import EmailAlreadyRegisteredError, HandleTakenError
-from accounts.models import Account, VerificationToken
+from accounts.models import Account, RevokedAccessToken, VerificationToken
 from accounts.passwords import hash_password
 from accounts.repository import AccountsRepository
 
@@ -212,3 +212,17 @@ def test_consuming_a_spent_token_answers_nothing(session: Session) -> None:
     repository.consume_token(saved)
 
     assert repository.consume_token(saved) is None
+
+
+def test_revokes_an_access_token_and_keeps_the_record_once(session: Session) -> None:
+    repository = AccountsRepository(session)
+    jti = uuid.uuid4()
+    expires_at = datetime.now(UTC) + timedelta(hours=1)
+
+    repository.revoke_access_token(jti, expires_at)
+    repository.revoke_access_token(jti, expires_at)
+
+    session.expire_all()
+    stored = session.query(RevokedAccessToken).filter_by(jti=jti).all()
+    assert len(stored) == 1
+    assert repository.is_access_token_revoked(jti) is True

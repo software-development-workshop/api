@@ -3,22 +3,32 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from accounts import tokens
+from accounts.access_tokens import issue
 from accounts.errors import (
     AccountTemporarilyLockedError,
     EmailAlreadyRegisteredError,
     ExpiredVerificationTokenError,
     HandleTakenError,
+    InvalidAccessTokenError,
     InvalidCredentialsError,
     InvalidVerificationTokenError,
     SuspendedAccountError,
     UnverifiedAccountError,
 )
 from accounts.models import Account
-from accounts.service import authenticate, register, resend_verification, verify
+from accounts.service import (
+    authenticate,
+    register,
+    resend_verification,
+    revoke_access_token,
+    validate_access_token,
+    verify,
+)
 from tests.fakes import FakeMailer
 from tests.unit.fakes import FakeAccountsRepository
 
 LOGIN_TIME = datetime(2030, 1, 2, 3, 4, 5, tzinfo=UTC)
+JWT_SECRET = "unit-test-jwt-secret-longer-than-32-bytes"
 
 
 @pytest.fixture
@@ -358,3 +368,45 @@ def test_a_correct_password_breaks_the_failure_streak(
 
     assert account.failed_login_attempts == 1
     assert account.locked_until is None
+
+
+def test_logout_revokes_a_valid_access_token_and_validation_rejects_it(
+    repository: FakeAccountsRepository, mailer: FakeMailer
+) -> None:
+    account = active_account(repository, mailer)
+    token = issue(account.id, JWT_SECRET, now=datetime.now(UTC)).token
+
+    revoke_access_token(repository, token, JWT_SECRET)
+
+    with pytest.raises(InvalidAccessTokenError, match="Invalid access token"):
+        validate_access_token(repository, token, JWT_SECRET)
+
+
+def test_validation_accepts_an_active_access_token(
+    repository: FakeAccountsRepository, mailer: FakeMailer
+) -> None:
+    account = active_account(repository, mailer)
+    token = issue(account.id, JWT_SECRET, now=datetime.now(UTC)).token
+
+    claims = validate_access_token(repository, token, JWT_SECRET)
+
+    assert claims.subject == account.id
+
+
+def test_validation_rejects_a_malformed_access_token(
+    repository: FakeAccountsRepository,
+) -> None:
+    with pytest.raises(InvalidAccessTokenError, match="Invalid access token"):
+        validate_access_token(repository, "malformed", JWT_SECRET)
+
+
+def test_logout_is_idempotent_for_the_same_access_token(
+    repository: FakeAccountsRepository, mailer: FakeMailer
+) -> None:
+    account = active_account(repository, mailer)
+    token = issue(account.id, JWT_SECRET, now=datetime.now(UTC)).token
+
+    revoke_access_token(repository, token, JWT_SECRET)
+    revoke_access_token(repository, token, JWT_SECRET)
+
+    assert len(repository.revoked_access_tokens) == 1

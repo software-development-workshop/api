@@ -15,6 +15,7 @@ class FakeAccountsRepository:
         self.accounts = accounts or []
         self.tokens: list[VerificationToken] = []
         self.completed_login_attempts = 0
+        self.revoked_access_tokens: dict[uuid.UUID, datetime] = {}
 
     def add(self, account: Account) -> Account:
         # The database fills these on insert; a fake that skips them lets a caller that
@@ -51,6 +52,12 @@ class FakeAccountsRepository:
     def finish_login_attempt(self, account: Account | None) -> Account | None:
         self.completed_login_attempts += 1
         return account
+
+    def revoke_access_token(self, jti: uuid.UUID, expires_at: datetime) -> None:
+        self.revoked_access_tokens.setdefault(jti, expires_at)
+
+    def is_access_token_revoked(self, jti: uuid.UUID) -> bool:
+        return jti in self.revoked_access_tokens
 
     def find_token(self, token_digest: str) -> VerificationToken | None:
         return next((t for t in self.tokens if t.token_digest == token_digest), None)

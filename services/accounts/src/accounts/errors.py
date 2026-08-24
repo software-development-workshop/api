@@ -58,6 +58,12 @@ class AccountTemporarilyLockedError(DomainError):
     title = "Account temporarily locked"
 
 
+class InvalidAccessTokenError(DomainError):
+    status = 401
+    slug = "invalid-access-token"
+    title = "Invalid access token"
+
+
 def _problem(status: int, slug: str, title: str, detail: str, **extra: object) -> JSONResponse:
     body = {
         "type": f"{PROBLEM_BASE}/{slug}",
