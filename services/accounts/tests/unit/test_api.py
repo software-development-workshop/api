@@ -263,3 +263,28 @@ def test_login_uses_one_response_for_suspended_and_deleted_accounts(
     assert response.status_code == 403
     assert response.json()["type"].endswith("/suspended-account")
     assert response.json()["detail"] == "Suspended account."
+
+
+def test_five_wrong_passwords_lock_the_account_without_revealing_it_early(
+    client: TestClient, mailer: FakeMailer
+) -> None:
+    verify_registered_account(client, mailer)
+
+    failures = [
+        client.post(
+            "/api/v1/sessions",
+            json={"identifier": VALID["email"], "password": "Wr0ngPassword"},
+        )
+        for _ in range(5)
+    ]
+
+    assert {response.status_code for response in failures} == {401}
+    assert {response.json()["type"] for response in failures} == {
+        "https://udesa-x.dev/problems/invalid-credentials"
+    }
+    locked = client.post(
+        "/api/v1/sessions",
+        json={"identifier": VALID["email"], "password": VALID["password"]},
+    )
+    assert locked.status_code == 423
+    assert locked.json()["type"].endswith("/account-temporarily-locked")

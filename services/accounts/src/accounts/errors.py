@@ -52,6 +52,12 @@ class SuspendedAccountError(DomainError):
     title = "Suspended account"
 
 
+class AccountTemporarilyLockedError(DomainError):
+    status = 423
+    slug = "account-temporarily-locked"
+    title = "Account temporarily locked"
+
+
 def _problem(status: int, slug: str, title: str, detail: str, **extra: object) -> JSONResponse:
     body = {
         "type": f"{PROBLEM_BASE}/{slug}",

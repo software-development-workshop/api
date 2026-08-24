@@ -115,6 +115,21 @@ def test_persists_suspended_and_deleted_account_state(session: Session) -> None:
     assert reloaded.deleted_at == now
 
 
+def test_persists_login_lockout_state(session: Session) -> None:
+    repository = AccountsRepository(session)
+    stored = repository.add(account())
+    locked_until = datetime.now(UTC) + timedelta(minutes=15)
+    stored.failed_login_attempts = 5
+    stored.locked_until = locked_until
+
+    repository.save(stored)
+    session.expire_all()
+    reloaded = session.get(Account, stored.id)
+
+    assert reloaded.failed_login_attempts == 5
+    assert reloaded.locked_until == locked_until
+
+
 def test_issuing_burns_every_live_token_of_the_account(session: Session) -> None:
     repository = AccountsRepository(session)
     stored = repository.add(account())

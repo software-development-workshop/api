@@ -20,6 +20,7 @@ class FakeAccountsRepository:
         # reads account.id right after registering pass here and fail in production.
         account.id = account.id or uuid.uuid4()
         account.created_at = account.created_at or datetime.now(UTC)
+        account.failed_login_attempts = account.failed_login_attempts or 0
         self.accounts.append(account)
         return account
 

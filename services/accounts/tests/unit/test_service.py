@@ -4,6 +4,7 @@ import pytest
 
 from accounts import tokens
 from accounts.errors import (
+    AccountTemporarilyLockedError,
     EmailAlreadyRegisteredError,
     ExpiredVerificationTokenError,
     HandleTakenError,
@@ -16,6 +17,8 @@ from accounts.models import Account
 from accounts.service import authenticate, register, resend_verification, verify
 from tests.fakes import FakeMailer
 from tests.unit.fakes import FakeAccountsRepository
+
+LOGIN_TIME = datetime(2030, 1, 2, 3, 4, 5, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -240,3 +243,94 @@ def test_correct_credentials_for_an_unusable_account_share_one_error(
 
     with pytest.raises(SuspendedAccountError, match="Suspended account"):
         authenticate(repository, account.email, "Passw0rd")
+
+
+def test_the_fifth_consecutive_wrong_password_locks_for_fifteen_minutes(
+    repository: FakeAccountsRepository, mailer: FakeMailer
+) -> None:
+    account = active_account(repository, mailer)
+
+    for _ in range(5):
+        with pytest.raises(InvalidCredentialsError, match="Invalid credentials"):
+            authenticate(repository, account.email, "Wr0ngPassword", now=LOGIN_TIME)
+
+    assert account.failed_login_attempts == 5
+    assert account.locked_until == LOGIN_TIME + timedelta(minutes=15)
+
+
+def test_correct_password_is_refused_while_the_lock_is_active(
+    repository: FakeAccountsRepository, mailer: FakeMailer
+) -> None:
+    account = active_account(repository, mailer)
+    account.failed_login_attempts = 5
+    account.locked_until = LOGIN_TIME + timedelta(minutes=15)
+
+    with pytest.raises(AccountTemporarilyLockedError, match="temporarily locked"):
+        authenticate(repository, account.email, "Passw0rd", now=LOGIN_TIME)
+
+
+def test_wrong_password_remains_generic_while_the_lock_is_active(
+    repository: FakeAccountsRepository, mailer: FakeMailer
+) -> None:
+    account = active_account(repository, mailer)
+    account.failed_login_attempts = 5
+    account.locked_until = LOGIN_TIME + timedelta(minutes=15)
+
+    with pytest.raises(InvalidCredentialsError, match="Invalid credentials"):
+        authenticate(repository, account.email, "Wr0ngPassword", now=LOGIN_TIME)
+
+    assert account.failed_login_attempts == 5
+    assert account.locked_until == LOGIN_TIME + timedelta(minutes=15)
+
+
+def test_an_expired_lock_allows_the_correct_password(
+    repository: FakeAccountsRepository, mailer: FakeMailer
+) -> None:
+    account = active_account(repository, mailer)
+    account.failed_login_attempts = 5
+    account.locked_until = LOGIN_TIME
+
+    authenticated = authenticate(
+        repository,
+        account.email,
+        "Passw0rd",
+        now=LOGIN_TIME + timedelta(seconds=1),
+    )
+
+    assert authenticated is account
+    assert account.failed_login_attempts == 0
+    assert account.locked_until is None
+
+
+def test_a_wrong_password_after_an_expired_lock_starts_a_new_streak(
+    repository: FakeAccountsRepository, mailer: FakeMailer
+) -> None:
+    account = active_account(repository, mailer)
+    account.failed_login_attempts = 5
+    account.locked_until = LOGIN_TIME
+
+    with pytest.raises(InvalidCredentialsError):
+        authenticate(
+            repository,
+            account.email,
+            "Wr0ngPassword",
+            now=LOGIN_TIME + timedelta(seconds=1),
+        )
+
+    assert account.failed_login_attempts == 1
+    assert account.locked_until is None
+
+
+def test_a_correct_password_breaks_the_failure_streak(
+    repository: FakeAccountsRepository, mailer: FakeMailer
+) -> None:
+    account = active_account(repository, mailer)
+    with pytest.raises(InvalidCredentialsError):
+        authenticate(repository, account.email, "Wr0ngPassword", now=LOGIN_TIME)
+
+    authenticate(repository, account.email, "Passw0rd", now=LOGIN_TIME)
+    with pytest.raises(InvalidCredentialsError):
+        authenticate(repository, account.email, "Wr0ngPassword", now=LOGIN_TIME)
+
+    assert account.failed_login_attempts == 1
+    assert account.locked_until is None

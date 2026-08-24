@@ -3,6 +3,7 @@ from typing import Protocol
 
 from accounts import tokens
 from accounts.errors import (
+    AccountTemporarilyLockedError,
     EmailAlreadyRegisteredError,
     ExpiredVerificationTokenError,
     HandleTakenError,
@@ -16,22 +17,44 @@ from accounts.passwords import hash_password, verify_password
 from accounts.repository import AccountsRepository
 
 VERIFICATION_TTL = timedelta(hours=24)
+MAX_FAILED_LOGIN_ATTEMPTS = 5
+LOGIN_LOCK_TTL = timedelta(minutes=15)
 
 
 class Mailer(Protocol):
     def send_verification(self, to: str, token: str) -> None: ...
 
 
-def authenticate(repository: AccountsRepository, identifier: str, password: str) -> Account:
+def authenticate(
+    repository: AccountsRepository,
+    identifier: str,
+    password: str,
+    now: datetime | None = None,
+) -> Account:
     account = repository.find_for_login(identifier)
     password_hash = account.password_hash if account is not None else None
-    if not verify_password(password_hash, password):
-        if account is not None:
-            repository.save(account)
+    password_matches = verify_password(password_hash, password)
+    attempted_at = now or datetime.now(UTC)
+    if account is None:
         raise InvalidCredentialsError("Invalid credentials.")
 
-    if account is None:  # pragma: no cover - verify_password(None, ...) is always false
+    lock_is_active = account.locked_until is not None and account.locked_until > attempted_at
+    if not password_matches:
+        if not lock_is_active:
+            if account.locked_until is not None:
+                account.failed_login_attempts = 0
+                account.locked_until = None
+            account.failed_login_attempts += 1
+            if account.failed_login_attempts >= MAX_FAILED_LOGIN_ATTEMPTS:
+                account.locked_until = attempted_at + LOGIN_LOCK_TTL
+        repository.save(account)
         raise InvalidCredentialsError("Invalid credentials.")
+    if lock_is_active:
+        repository.save(account)
+        raise AccountTemporarilyLockedError("Account temporarily locked. Try again later.")
+
+    account.failed_login_attempts = 0
+    account.locked_until = None
     if account.suspended_at is not None or account.deleted_at is not None:
         repository.save(account)
         raise SuspendedAccountError("Suspended account.")
