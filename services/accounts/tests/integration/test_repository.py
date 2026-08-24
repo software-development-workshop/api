@@ -2,15 +2,25 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from argon2 import PasswordHasher
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from accounts.errors import EmailAlreadyRegisteredError, HandleTakenError
 from accounts.models import Account, VerificationToken
+from accounts.passwords import hash_password
 from accounts.repository import AccountsRepository
+
+VALID_PASSWORD_HASH = hash_password("Passw0rd")
+NONCANONICAL_STRONGER_HASH = PasswordHasher(
+    memory_cost=32768,
+    time_cost=3,
+    parallelism=2,
+).hash("Passw0rd")
 
 
 def account(email: str = "juan@udesa.edu.ar", handle: str = "juan") -> Account:
-    return Account(email=email, handle=handle, password_hash="$argon2id$stub")
+    return Account(email=email, handle=handle, password_hash=VALID_PASSWORD_HASH)
 
 
 def token(account_id: uuid.UUID, digest: str = "a" * 64, hours: int = 24) -> VerificationToken:
@@ -27,6 +37,14 @@ def test_persists_an_account_and_stamps_created_at(session: Session) -> None:
     assert stored.id is not None
     assert stored.created_at is not None
     assert stored.verified_at is None
+
+
+def test_rejects_noncanonical_stronger_password_hash_parameters(session: Session) -> None:
+    stronger_account = account()
+    stronger_account.password_hash = NONCANONICAL_STRONGER_HASH
+
+    with pytest.raises(IntegrityError):
+        AccountsRepository(session).add(stronger_account)
 
 
 @pytest.mark.parametrize("lookup", ["juan@udesa.edu.ar", "JUAN@UdeSA.EDU.ar"])
@@ -87,6 +105,80 @@ def test_finds_an_account_by_email_whatever_the_casing(session: Session) -> None
     repository.add(account(email="Juan@Udesa.edu.ar"))
 
     assert repository.find_by_email("JUAN@udesa.EDU.ar") is not None
+
+
+@pytest.mark.parametrize(
+    "identifier",
+    ["juan@udesa.edu.ar", "JUAN@UdeSA.edu.AR", "@juan", "@JUAN", "juan"],
+)
+def test_finds_an_account_for_login_by_email_or_handle(session: Session, identifier: str) -> None:
+    repository = AccountsRepository(session)
+    stored = repository.add(account())
+
+    assert repository.find_for_login(identifier).id == stored.id
+
+
+def test_persists_suspended_and_deleted_account_state(session: Session) -> None:
+    repository = AccountsRepository(session)
+    stored = repository.add(account())
+    now = datetime.now(UTC)
+    stored.suspended_at = now
+    stored.deleted_at = now
+
+    repository.save(stored)
+    session.expire_all()
+    reloaded = session.get(Account, stored.id)
+
+    assert reloaded.suspended_at == now
+    assert reloaded.deleted_at == now
+
+
+def test_persists_login_lockout_state(session: Session) -> None:
+    repository = AccountsRepository(session)
+    stored = repository.add(account())
+    locked_until = datetime.now(UTC) + timedelta(minutes=15)
+    stored.failed_login_attempts = 5
+    stored.locked_until = locked_until
+
+    repository.save(stored)
+    session.expire_all()
+    reloaded = session.get(Account, stored.id)
+
+    assert reloaded.failed_login_attempts == 5
+    assert reloaded.locked_until == locked_until
+
+
+@pytest.mark.parametrize(
+    "password_hash",
+    [
+        "",
+        "   ",
+        "\t",
+        "\n",
+        "\r\n",
+        "\u00a0",
+        "\u2003",
+        "not-an-argon2-hash",
+        "é",
+        "$argon2id$stub",
+        f"{VALID_PASSWORD_HASH}trailing",
+        VALID_PASSWORD_HASH.replace("m=19456", "m=01024"),
+        VALID_PASSWORD_HASH.replace("m=19456", "m=65537"),
+        VALID_PASSWORD_HASH.replace("m=19456", "m=999999"),
+        VALID_PASSWORD_HASH.replace("t=2", "t=5"),
+        VALID_PASSWORD_HASH.replace("t=2", "t=999"),
+        VALID_PASSWORD_HASH.replace("p=1", "p=5"),
+        VALID_PASSWORD_HASH.replace("p=1", "p=99"),
+        VALID_PASSWORD_HASH.replace("m=19456", "m=invalid"),
+        VALID_PASSWORD_HASH.replace("$argon2id$", "$argon2i$"),
+    ],
+)
+def test_rejects_an_unsupported_password_hash(session: Session, password_hash: str) -> None:
+    blank_account = account()
+    blank_account.password_hash = password_hash
+
+    with pytest.raises(IntegrityError):
+        AccountsRepository(session).add(blank_account)
 
 
 def test_issuing_burns_every_live_token_of_the_account(session: Session) -> None:

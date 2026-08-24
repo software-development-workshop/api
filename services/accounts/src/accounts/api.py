@@ -1,16 +1,17 @@
 import uuid
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Response, status
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, EmailStr, StringConstraints, field_validator
 from sqlalchemy.orm import Session
 
-from accounts.config import API_PREFIX
+from accounts import access_tokens
+from accounts.config import API_PREFIX, Settings, get_settings
 from accounts.db import get_session
 from accounts.email import SmtpMailer
 from accounts.models import Account
 from accounts.repository import AccountsRepository
-from accounts.service import Mailer, register, resend_verification, verify
+from accounts.service import Mailer, authenticate, register, resend_verification, verify
 from accounts.validation import normalise_handle, validate_password
 
 router = APIRouter(prefix=API_PREFIX)
@@ -28,6 +29,10 @@ def get_mailer() -> Mailer:
 
 RepositoryDep = Annotated[AccountsRepository, Depends(get_repository)]
 MailerDep = Annotated[Mailer, Depends(get_mailer)]
+SettingsDep = Annotated[Settings, Depends(get_settings)]
+
+Identifier = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=254)]
+Password = Annotated[str, StringConstraints(min_length=1, max_length=128)]
 
 
 class RegistrationRequest(BaseModel):
@@ -53,6 +58,17 @@ class RegistrationRequest(BaseModel):
 
 class ResendRequest(BaseModel):
     email: EmailStr
+
+
+class SessionRequest(BaseModel):
+    identifier: Identifier
+    password: Password
+
+
+class SessionResponse(BaseModel):
+    access_token: str
+    token_type: Literal["bearer"] = "bearer"  # noqa: S105
+    expires_in: int
 
 
 class AccountResponse(BaseModel):
@@ -87,3 +103,12 @@ def verify_account(token: str, repository: RepositoryDep) -> AccountResponse:
 def resend(body: ResendRequest, repository: RepositoryDep, mailer: MailerDep) -> Response:
     resend_verification(repository, mailer, body.email)
     return Response(status_code=status.HTTP_202_ACCEPTED)
+
+
+@router.post("/sessions")
+def create_session(
+    body: SessionRequest, repository: RepositoryDep, settings: SettingsDep
+) -> SessionResponse:
+    account = authenticate(repository, body.identifier, body.password)
+    issued = access_tokens.issue(account.id, settings.jwt_secret)
+    return SessionResponse(access_token=issued.token, expires_in=issued.expires_in)

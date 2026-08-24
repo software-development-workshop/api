@@ -58,6 +58,7 @@ jobs:
       SMTP_PORT: "1025"
       SMTP_FROM: no-reply@udesa-x.dev
       PUBLIC_BASE_URL: http://localhost:8000
+      JWT_SECRET: integration-test-jwt-secret-32-bytes-minimum
 
     steps:
       - uses: actions/checkout@v4

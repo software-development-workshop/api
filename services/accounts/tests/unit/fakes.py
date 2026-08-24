@@ -14,12 +14,14 @@ class FakeAccountsRepository:
     def __init__(self, accounts: list[Account] | None = None) -> None:
         self.accounts = accounts or []
         self.tokens: list[VerificationToken] = []
+        self.completed_login_attempts = 0
 
     def add(self, account: Account) -> Account:
         # The database fills these on insert; a fake that skips them lets a caller that
         # reads account.id right after registering pass here and fail in production.
         account.id = account.id or uuid.uuid4()
         account.created_at = account.created_at or datetime.now(UTC)
+        account.failed_login_attempts = account.failed_login_attempts or 0
         self.accounts.append(account)
         return account
 
@@ -31,6 +33,24 @@ class FakeAccountsRepository:
 
     def find_by_email(self, email: str) -> Account | None:
         return next((a for a in self.accounts if a.email.lower() == email.lower()), None)
+
+    def find_for_login(self, identifier: str) -> Account | None:
+        canonical = identifier.strip().lower()
+        if canonical.startswith("@"):
+            return next(
+                (a for a in self.accounts if a.handle.lower() == canonical.removeprefix("@")),
+                None,
+            )
+        if "@" in canonical:
+            return next((a for a in self.accounts if a.email.lower() == canonical), None)
+        return next((a for a in self.accounts if a.handle.lower() == canonical), None)
+
+    def save(self, account: Account) -> Account:
+        return account
+
+    def finish_login_attempt(self, account: Account | None) -> Account | None:
+        self.completed_login_attempts += 1
+        return account
 
     def find_token(self, token_digest: str) -> VerificationToken | None:
         return next((t for t in self.tokens if t.token_digest == token_digest), None)

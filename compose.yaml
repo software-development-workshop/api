@@ -29,8 +29,9 @@ services:
       SMTP_PORT: 1025
       SMTP_FROM: no-reply@udesa-x.dev
       PUBLIC_BASE_URL: http://localhost:8000
+      JWT_SECRET: "${JWT_SECRET:?Set JWT_SECRET to at least 32 random bytes}"
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       accounts-db:
         condition: service_healthy

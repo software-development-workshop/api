@@ -19,6 +19,7 @@ ENV = {
     "SMTP_PORT": "1025",
     "SMTP_FROM": "no-reply@udesa-x.dev",
     "PUBLIC_BASE_URL": "https://api.udesa-x.dev",
+    "JWT_SECRET": "unit-test-jwt-secret-longer-than-32-bytes",
 }
 
 
