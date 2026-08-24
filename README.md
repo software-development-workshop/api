@@ -15,9 +15,17 @@ containerised and owns its own database; they share a repository, not a runtime.
 
 From a clean clone, with Docker running:
 
-```bash
+PowerShell:
+
+```powershell
+$bytes = New-Object byte[] 32
+[Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+$env:JWT_SECRET = [Convert]::ToBase64String($bytes)
 docker compose up --build
 ```
+
+On a POSIX shell, use `export JWT_SECRET="$(openssl rand -base64 32)"` before the same
+Compose command. The value is local and must never be committed.
 
 The API docs are then at <http://localhost:8000/docs>, and the verification emails land in
 the Mailpit inbox at <http://localhost:8025> — nothing leaves the machine while developing.
@@ -36,7 +44,7 @@ The integration tests need the database. `compose.yaml` publishes it on **5433**
 not collide with a Postgres already running on the default port:
 
 ```bash
-docker compose up -d accounts-db
+JWT_SECRET=integration-test-jwt-secret-32-bytes-minimum docker compose up -d accounts-db
 cd services/accounts
 DB_HOST=localhost DB_PORT=5433 DB_NAME=accounts DB_USER=accounts DB_PASSWORD=accounts \
   SMTP_HOST=localhost SMTP_PORT=1025 SMTP_FROM=no-reply@udesa-x.dev \
