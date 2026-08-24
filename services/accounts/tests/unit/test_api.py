@@ -288,3 +288,28 @@ def test_five_wrong_passwords_lock_the_account_without_revealing_it_early(
     )
     assert locked.status_code == 423
     assert locked.json()["type"].endswith("/account-temporarily-locked")
+
+
+def test_non_ascii_stored_hash_stays_generic_and_counts_toward_lockout(
+    client: TestClient,
+    mailer: FakeMailer,
+    repository: FakeAccountsRepository,
+) -> None:
+    verify_registered_account(client, mailer)
+    account = repository.accounts[0]
+    account.password_hash = "é"
+
+    failures = [
+        client.post(
+            "/api/v1/sessions",
+            json={"identifier": VALID["email"], "password": "Wr0ngPassword"},
+        )
+        for _ in range(5)
+    ]
+
+    assert {response.status_code for response in failures} == {401}
+    assert {response.json()["type"] for response in failures} == {
+        "https://udesa-x.dev/problems/invalid-credentials"
+    }
+    assert account.failed_login_attempts == 5
+    assert account.locked_until is not None

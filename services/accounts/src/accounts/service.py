@@ -36,6 +36,7 @@ def authenticate(
     password_matches = verify_password(password_hash, password)
     attempted_at = now or datetime.now(UTC)
     if account is None:
+        repository.finish_login_attempt(None)
         raise InvalidCredentialsError("Invalid credentials.")
 
     lock_is_active = account.locked_until is not None and account.locked_until > attempted_at
@@ -47,22 +48,23 @@ def authenticate(
             account.failed_login_attempts += 1
             if account.failed_login_attempts >= MAX_FAILED_LOGIN_ATTEMPTS:
                 account.locked_until = attempted_at + LOGIN_LOCK_TTL
-        repository.save(account)
+        repository.finish_login_attempt(account)
         raise InvalidCredentialsError("Invalid credentials.")
     if lock_is_active:
-        repository.save(account)
+        repository.finish_login_attempt(account)
         raise AccountTemporarilyLockedError("Account temporarily locked. Try again later.")
 
     account.failed_login_attempts = 0
     account.locked_until = None
     if account.suspended_at is not None or account.deleted_at is not None:
-        repository.save(account)
+        repository.finish_login_attempt(account)
         raise SuspendedAccountError("Suspended account.")
     if account.verified_at is None:
-        repository.save(account)
+        repository.finish_login_attempt(account)
         raise UnverifiedAccountError("Account not verified. Check your inbox.")
 
-    return repository.save(account)
+    repository.finish_login_attempt(account)
+    return account
 
 
 def register(

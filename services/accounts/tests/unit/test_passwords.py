@@ -1,5 +1,8 @@
+import pytest
 from argon2 import PasswordHasher
+from argon2.exceptions import InvalidHashError
 
+from accounts import passwords
 from accounts.passwords import hash_password, verify_password
 
 
@@ -35,3 +38,61 @@ def test_rejects_a_different_password() -> None:
 
 def test_rejects_a_password_for_a_missing_account_without_raising() -> None:
     assert verify_password(None, "Passw0rd") is False
+
+
+def test_rejects_a_password_for_a_malformed_hash_without_raising() -> None:
+    assert verify_password("not-an-argon2-hash", "Passw0rd") is False
+
+
+def test_rejects_a_password_for_a_non_ascii_hash_without_raising() -> None:
+    assert verify_password("é", "Passw0rd") is False
+
+
+@pytest.mark.parametrize("password_hash", ["", "   ", "\t", "\n", "\r\n", "\u00a0", "\u2003"])
+def test_empty_hash_never_authenticates_with_the_dummy_password(password_hash: str) -> None:
+    assert verify_password(password_hash, "DummyPassw0rd") is False
+
+
+@pytest.mark.parametrize(
+    "verification_error",
+    [
+        InvalidHashError(),
+        UnicodeEncodeError("ascii", "é", 0, 1, "ordinal not in range"),
+    ],
+)
+def test_malformed_hash_still_performs_dummy_argon2_work(
+    monkeypatch: pytest.MonkeyPatch, verification_error: Exception
+) -> None:
+    calls: list[str] = []
+    malformed_hash = hash_password("Passw0rd")
+
+    class SpyHasher:
+        def verify(self, password_hash: str, candidate: str) -> bool:
+            calls.append(password_hash)
+            if password_hash == malformed_hash:
+                raise verification_error
+            return True
+
+    monkeypatch.setattr(passwords, "_hasher", SpyHasher())
+    monkeypatch.setattr(passwords, "_dummy_hash", "dummy")
+
+    assert passwords.verify_password(malformed_hash, "Passw0rd") is False
+    assert calls == [malformed_hash, "dummy"]
+
+
+def test_rejects_excessive_cost_before_argon2_verification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    excessive_hash = hash_password("Passw0rd").replace("m=19456", "m=999999")
+    calls: list[str] = []
+
+    class SpyHasher:
+        def verify(self, password_hash: str, candidate: str) -> bool:
+            calls.append(password_hash)
+            return True
+
+    monkeypatch.setattr(passwords, "_hasher", SpyHasher())
+    monkeypatch.setattr(passwords, "_dummy_hash", "dummy")
+
+    assert passwords.verify_password(excessive_hash, "Passw0rd") is False
+    assert calls == ["dummy"]

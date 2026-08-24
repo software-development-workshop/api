@@ -14,6 +14,7 @@ class FakeAccountsRepository:
     def __init__(self, accounts: list[Account] | None = None) -> None:
         self.accounts = accounts or []
         self.tokens: list[VerificationToken] = []
+        self.completed_login_attempts = 0
 
     def add(self, account: Account) -> Account:
         # The database fills these on insert; a fake that skips them lets a caller that
@@ -45,6 +46,10 @@ class FakeAccountsRepository:
         return next((a for a in self.accounts if a.handle.lower() == canonical), None)
 
     def save(self, account: Account) -> Account:
+        return account
+
+    def finish_login_attempt(self, account: Account | None) -> Account | None:
+        self.completed_login_attempts += 1
         return account
 
     def find_token(self, token_digest: str) -> VerificationToken | None:

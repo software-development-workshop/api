@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from hashlib import sha256
 
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -45,16 +46,29 @@ class AccountsRepository:
         if canonical.startswith("@"):
             column = Account.handle
             canonical = canonical.removeprefix("@")
+            identifier_kind = "handle"
         elif "@" in canonical:
             column = Account.email
+            identifier_kind = "email"
         else:
             column = Account.handle
+            identifier_kind = "handle"
+        # A missing row cannot carry a FOR UPDATE lock. The transaction-scoped advisory
+        # lock gives known and unknown identifiers the same serialization boundary without
+        # retaining a global lock or storing attempted identifiers.
+        lock_material = f"{identifier_kind}:{canonical}".encode()
+        lock_key = int.from_bytes(sha256(lock_material).digest()[:8], byteorder="big", signed=True)
+        self._session.execute(select(func.pg_advisory_xact_lock(lock_key)))
         statement = select(Account).where(func.lower(column) == canonical).with_for_update()
         return self._session.execute(statement).scalar_one_or_none()
 
     def save(self, account: Account) -> Account:
         self._session.commit()
         self._session.refresh(account)
+        return account
+
+    def finish_login_attempt(self, account: Account | None) -> Account | None:
+        self._session.commit()
         return account
 
     def find_token(self, token_digest: str) -> VerificationToken | None:

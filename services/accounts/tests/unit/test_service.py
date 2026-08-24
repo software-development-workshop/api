@@ -209,6 +209,30 @@ def test_unknown_identity_and_wrong_password_are_indistinguishable(
     assert unknown.value.detail == wrong.value.detail == "Invalid credentials."
 
 
+def test_unknown_identity_and_wrong_password_complete_the_same_login_lifecycle(
+    repository: FakeAccountsRepository, mailer: FakeMailer
+) -> None:
+    active_account(repository, mailer)
+
+    for identifier in ["nadie@udesa.edu.ar", "juan@udesa.edu.ar"]:
+        with pytest.raises(InvalidCredentialsError):
+            authenticate(repository, identifier, "Wr0ngPassword")
+
+    assert repository.completed_login_attempts == 2
+
+
+def test_a_malformed_stored_hash_is_an_invalid_credential(
+    repository: FakeAccountsRepository, mailer: FakeMailer
+) -> None:
+    account = active_account(repository, mailer)
+    account.password_hash = "not-an-argon2-hash"
+
+    with pytest.raises(InvalidCredentialsError, match="Invalid credentials"):
+        authenticate(repository, account.email, "Passw0rd", now=LOGIN_TIME)
+
+    assert account.failed_login_attempts == 1
+
+
 @pytest.mark.parametrize("state", ["unverified", "suspended", "deleted"])
 def test_a_wrong_password_never_reveals_account_state(
     repository: FakeAccountsRepository, mailer: FakeMailer, state: str

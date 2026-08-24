@@ -2,15 +2,19 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from accounts.errors import EmailAlreadyRegisteredError, HandleTakenError
 from accounts.models import Account, VerificationToken
+from accounts.passwords import hash_password
 from accounts.repository import AccountsRepository
+
+VALID_PASSWORD_HASH = hash_password("Passw0rd")
 
 
 def account(email: str = "juan@udesa.edu.ar", handle: str = "juan") -> Account:
-    return Account(email=email, handle=handle, password_hash="$argon2id$stub")
+    return Account(email=email, handle=handle, password_hash=VALID_PASSWORD_HASH)
 
 
 def token(account_id: uuid.UUID, digest: str = "a" * 64, hours: int = 24) -> VerificationToken:
@@ -128,6 +132,35 @@ def test_persists_login_lockout_state(session: Session) -> None:
 
     assert reloaded.failed_login_attempts == 5
     assert reloaded.locked_until == locked_until
+
+
+@pytest.mark.parametrize(
+    "password_hash",
+    [
+        "",
+        "   ",
+        "\t",
+        "\n",
+        "\r\n",
+        "\u00a0",
+        "\u2003",
+        "not-an-argon2-hash",
+        "é",
+        "$argon2id$stub",
+        f"{VALID_PASSWORD_HASH}trailing",
+        VALID_PASSWORD_HASH.replace("m=19456", "m=999999"),
+        VALID_PASSWORD_HASH.replace("t=2", "t=999"),
+        VALID_PASSWORD_HASH.replace("p=1", "p=99"),
+        VALID_PASSWORD_HASH.replace("m=19456", "m=invalid"),
+        VALID_PASSWORD_HASH.replace("$argon2id$", "$argon2i$"),
+    ],
+)
+def test_rejects_an_unsupported_password_hash(session: Session, password_hash: str) -> None:
+    blank_account = account()
+    blank_account.password_hash = password_hash
+
+    with pytest.raises(IntegrityError):
+        AccountsRepository(session).add(blank_account)
 
 
 def test_issuing_burns_every_live_token_of_the_account(session: Session) -> None:
