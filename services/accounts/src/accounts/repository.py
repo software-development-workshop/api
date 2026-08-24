@@ -75,16 +75,22 @@ class AccountsRepository:
         statement = select(VerificationToken).where(VerificationToken.token_digest == token_digest)
         return self._session.execute(statement).scalar_one_or_none()
 
-    def issue_token(self, token: VerificationToken) -> VerificationToken:
+    def issue_token(self, token: VerificationToken) -> VerificationToken | None:
         """Replace every live token of an account with this one, in a single transaction.
 
         The account row is locked first. Without it two concurrent resends each invalidate
         the tokens they can see and then insert their own, and the account ends up with two
         usable links instead of one.
         """
-        self._session.execute(
-            select(Account.id).where(Account.id == token.account_id).with_for_update()
-        )
+        account = self._session.execute(
+            select(Account)
+            .where(Account.id == token.account_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).scalar_one()
+        if account.verified_at is not None:
+            self._session.rollback()
+            return None
         self._session.execute(
             update(VerificationToken)
             .where(VerificationToken.account_id == token.account_id)
@@ -104,6 +110,18 @@ class AccountsRepository:
         here. Verifying the account in the same transaction keeps the two facts from ever
         disagreeing.
         """
+        account = self._session.execute(
+            select(Account)
+            .where(Account.id == token.account_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).scalar_one_or_none()
+        if account is None:  # pragma: no cover - the foreign key makes this unreachable
+            raise LookupError("verification token points at a missing account")
+        if account.verified_at is not None:
+            self._session.rollback()
+            return None
+
         now = datetime.now(UTC)
         spent = self._session.execute(
             update(VerificationToken)
@@ -115,9 +133,6 @@ class AccountsRepository:
             self._session.rollback()
             return None
 
-        account = self._session.get(Account, token.account_id)
-        if account is None:  # pragma: no cover - the foreign key makes this unreachable
-            raise LookupError("verification token points at a missing account")
         account.verified_at = now
         self._session.commit()
         self._session.refresh(account)

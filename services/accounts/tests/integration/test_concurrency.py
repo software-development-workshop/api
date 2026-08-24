@@ -16,6 +16,7 @@ from accounts.service import authenticate, register, resend_verification, verify
 from tests.fakes import FakeMailer
 
 WORKERS = 2
+THREAD_TIMEOUT_SECONDS = 5
 
 
 def in_parallel(
@@ -43,14 +44,19 @@ def in_parallel(
     for thread in threads:
         thread.start()
     for thread in threads:
-        thread.join(timeout=5)
-    assert all(not thread.is_alive() for thread in threads), "concurrent workers deadlocked"
+        thread.join(timeout=THREAD_TIMEOUT_SECONDS)
+    assert all(not thread.is_alive() for thread in threads), "parallel worker did not finish"
     return results
 
 
-def sign_up(session: Session, mailer: FakeMailer) -> AccountsRepository:
+def sign_up(
+    session: Session,
+    mailer: FakeMailer,
+    email: str = "juan@udesa.edu.ar",
+    handle: str = "juan",
+) -> AccountsRepository:
     repository = AccountsRepository(session)
-    register(repository, mailer, "juan@udesa.edu.ar", "juan", "Passw0rd")
+    register(repository, mailer, email, handle, "Passw0rd")
     return repository
 
 
@@ -91,6 +97,56 @@ def test_two_simultaneous_resends_leave_exactly_one_usable_link(
         m.last_token for m in mailers if tokens.digest(m.last_token) == live[0].token_digest
     )
     assert verify(AccountsRepository(session), survivor).verified_at is not None
+
+
+def test_verify_and_resend_race_has_no_deadlock_or_live_token_after_verification(
+    session: Session, mailer: FakeMailer
+) -> None:
+    for attempt in range(5):
+        email = f"juan{attempt}@udesa.edu.ar"
+        handle = f"juan{attempt}"
+        sign_up(session, mailer, email, handle)
+        account = session.execute(select(Account).where(Account.email == email)).scalar_one()
+        old_token = mailer.last_token
+        mailers = [FakeMailer() for _ in range(WORKERS)]
+
+        def race_work(
+            repository: AccountsRepository,
+            index: int,
+            token: str = old_token,
+            resend_mailers: list[FakeMailer] = mailers,
+            address: str = email,
+        ) -> object:
+            if index == 0:
+                return verify(repository, token)
+            return resend_verification(repository, resend_mailers[index], address)
+
+        results = in_parallel(race_work)
+
+        unexpected = [
+            result
+            for result in results
+            if isinstance(result, Exception)
+            and not isinstance(result, InvalidVerificationTokenError)
+        ]
+        assert unexpected == []
+
+        session.expire_all()
+        account = session.get(Account, account.id)
+        assert account is not None
+        live = (
+            session.execute(
+                select(VerificationToken)
+                .where(VerificationToken.account_id == account.id)
+                .where(VerificationToken.used_at.is_(None))
+            )
+            .scalars()
+            .all()
+        )
+        if account.verified_at is not None:
+            assert live == []
+        else:
+            assert len(live) == 1
 
 
 def test_five_simultaneous_wrong_passwords_lock_the_account(
