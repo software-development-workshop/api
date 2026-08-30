@@ -1,5 +1,5 @@
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 
 from sqlalchemy import func, select, update
@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from accounts.errors import EmailAlreadyRegisteredError, HandleTakenError
-from accounts.models import Account, RevokedAccessToken, VerificationToken
+from accounts.models import Account, PasswordResetToken, RevokedAccessToken, VerificationToken
 
 _EMAIL_UNIQUE_INDEX = "ix_accounts_email_lower"
 _HANDLE_UNIQUE_INDEX = "ix_accounts_handle_lower"
@@ -64,6 +64,18 @@ class AccountsRepository:
         statement = select(Account).where(func.lower(column) == canonical).with_for_update()
         return self._session.execute(statement).scalar_one_or_none()
 
+    def find_by_identifier(self, identifier: str) -> Account | None:
+        canonical = identifier.strip().lower()
+        if canonical.startswith("@"):
+            column = Account.handle
+            canonical = canonical.removeprefix("@")
+        elif "@" in canonical:
+            column = Account.email
+        else:
+            column = Account.handle
+        statement = select(Account).where(func.lower(column) == canonical)
+        return self._session.execute(statement).scalar_one_or_none()
+
     def save(self, account: Account) -> Account:
         self._session.commit()
         self._session.refresh(account)
@@ -87,6 +99,91 @@ class AccountsRepository:
     def session_version_for(self, account_id: uuid.UUID) -> int | None:
         statement = select(Account.session_version).where(Account.id == account_id)
         return self._session.execute(statement).scalar_one_or_none()
+
+    def find_password_reset(self, token_digest: str) -> PasswordResetToken | None:
+        statement = select(PasswordResetToken).where(
+            PasswordResetToken.token_digest == token_digest
+        )
+        return self._session.execute(statement).scalar_one_or_none()
+
+    def account_for_password_reset(self, account_id: uuid.UUID) -> Account | None:
+        return self._session.get(Account, account_id)
+
+    def issue_password_reset(
+        self,
+        token: PasswordResetToken,
+        *,
+        window: timedelta,
+        limit: int,
+    ) -> PasswordResetToken | None:
+        account = self._session.execute(
+            select(Account)
+            .where(Account.id == token.account_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).scalar_one_or_none()
+        if account is None:  # pragma: no cover - the foreign key makes this unreachable
+            raise LookupError("password reset token points at a missing account")
+
+        issued_in_window = self._session.execute(
+            select(func.count(PasswordResetToken.id))
+            .where(PasswordResetToken.account_id == token.account_id)
+            .where(PasswordResetToken.created_at >= token.created_at - window)
+        ).scalar_one()
+        if issued_in_window >= limit:
+            self._session.rollback()
+            return None
+
+        self._session.execute(
+            update(PasswordResetToken)
+            .where(PasswordResetToken.account_id == token.account_id)
+            .where(PasswordResetToken.used_at.is_(None))
+            .values(used_at=token.created_at)
+        )
+        self._session.add(token)
+        self._session.commit()
+        self._session.refresh(token)
+        return token
+
+    def consume_password_reset(
+        self,
+        token: PasswordResetToken,
+        password_hash: str,
+        *,
+        changed_at: datetime,
+    ) -> Account | None:
+        account = self._session.execute(
+            select(Account)
+            .where(Account.id == token.account_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).scalar_one_or_none()
+        if account is None:  # pragma: no cover - the foreign key makes this unreachable
+            raise LookupError("password reset token points at a missing account")
+
+        spent = self._session.execute(
+            update(PasswordResetToken)
+            .where(PasswordResetToken.id == token.id)
+            .where(PasswordResetToken.used_at.is_(None))
+            .values(used_at=changed_at)
+        )
+        if spent.rowcount == 0:
+            self._session.rollback()
+            return None
+
+        self._session.execute(
+            update(PasswordResetToken)
+            .where(PasswordResetToken.account_id == token.account_id)
+            .where(PasswordResetToken.used_at.is_(None))
+            .values(used_at=changed_at)
+        )
+        account.password_hash = password_hash
+        account.session_version += 1
+        account.failed_login_attempts = 0
+        account.locked_until = None
+        self._session.commit()
+        self._session.refresh(account)
+        return account
 
     def find_token(self, token_digest: str) -> VerificationToken | None:
         statement = select(VerificationToken).where(VerificationToken.token_digest == token_digest)

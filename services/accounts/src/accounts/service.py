@@ -5,25 +5,33 @@ from accounts import access_tokens, tokens
 from accounts.errors import (
     AccountTemporarilyLockedError,
     EmailAlreadyRegisteredError,
+    ExpiredPasswordResetTokenError,
     ExpiredVerificationTokenError,
     HandleTakenError,
     InvalidAccessTokenError,
     InvalidCredentialsError,
+    InvalidPasswordResetTokenError,
     InvalidVerificationTokenError,
+    PasswordUnchangedError,
     SuspendedAccountError,
     UnverifiedAccountError,
 )
-from accounts.models import Account, VerificationToken
+from accounts.models import Account, PasswordResetToken, VerificationToken
 from accounts.passwords import hash_password, verify_password
 from accounts.repository import AccountsRepository
 
 VERIFICATION_TTL = timedelta(hours=24)
 MAX_FAILED_LOGIN_ATTEMPTS = 5
 LOGIN_LOCK_TTL = timedelta(minutes=15)
+PASSWORD_RESET_TTL = timedelta(minutes=10)
+PASSWORD_RESET_WINDOW = timedelta(minutes=15)
+PASSWORD_RESET_LIMIT = 3
 
 
 class Mailer(Protocol):
     def send_verification(self, to: str, token: str) -> None: ...
+
+    def send_password_reset(self, to: str, token: str) -> None: ...
 
 
 def revoke_access_token(repository: AccountsRepository, token: str | None, secret: str) -> None:
@@ -148,6 +156,68 @@ def resend_verification(repository: AccountsRepository, mailer: Mailer, email: s
     if account is None or account.verified_at is not None:
         return
     _issue_verification(repository, mailer, account)
+
+
+def request_password_reset(
+    repository: AccountsRepository,
+    mailer: Mailer,
+    identifier: str,
+    now: datetime | None = None,
+) -> None:
+    account = repository.find_by_identifier(identifier)
+    if (
+        account is None
+        or account.verified_at is None
+        or account.suspended_at is not None
+        or account.deleted_at is not None
+    ):
+        return
+
+    requested_at = now or datetime.now(UTC)
+    raw_token = tokens.generate()
+    issued = repository.issue_password_reset(
+        PasswordResetToken(
+            account_id=account.id,
+            token_digest=tokens.digest(raw_token),
+            expires_at=requested_at + PASSWORD_RESET_TTL,
+            created_at=requested_at,
+        ),
+        window=PASSWORD_RESET_WINDOW,
+        limit=PASSWORD_RESET_LIMIT,
+    )
+    if issued is not None:
+        mailer.send_password_reset(account.email, raw_token)
+
+
+def reset_password(
+    repository: AccountsRepository,
+    token: str,
+    new_password: str,
+    now: datetime | None = None,
+) -> Account:
+    changed_at = now or datetime.now(UTC)
+    record = repository.find_password_reset(tokens.digest(token))
+    if record is None or record.used_at is not None:
+        raise InvalidPasswordResetTokenError("That password reset link is not valid.")
+    if record.expires_at <= changed_at:
+        raise ExpiredPasswordResetTokenError(
+            "That password reset link expired. Ask for a new one from the login screen."
+        )
+
+    account = repository.account_for_password_reset(record.account_id)
+    if account is None:  # pragma: no cover - the foreign key makes this unreachable
+        raise InvalidPasswordResetTokenError("That password reset link is not valid.")
+    if verify_password(account.password_hash, new_password):
+        raise PasswordUnchangedError("The new password must differ from the current password.")
+
+    changed = repository.consume_password_reset(
+        record,
+        hash_password(new_password),
+        changed_at=changed_at,
+    )
+    if changed is None:
+        raise InvalidPasswordResetTokenError("That password reset link is not valid.")
+    return changed
 
 
 def _issue_verification(repository: AccountsRepository, mailer: Mailer, account: Account) -> None:

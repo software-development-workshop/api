@@ -27,3 +27,19 @@ class SmtpMailer:
 
         with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as smtp:
             smtp.send_message(message)
+
+    def send_password_reset(self, to: str, token: str) -> None:
+        settings = get_settings()
+
+        message = EmailMessage()
+        message["From"] = settings.smtp_from
+        message["To"] = to
+        message["Subject"] = "Restablecé tu contraseña de UdeSA-X"
+        message.set_content(
+            "Para elegir una contraseña nueva, entrá a este link:\n\n"
+            f"{settings.public_base_url}/reset-password?token={token}\n\n"
+            "El link vence en 10 minutos. Si no fuiste vos, ignorá este mensaje."
+        )
+
+        with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as smtp:
+            smtp.send_message(message)
