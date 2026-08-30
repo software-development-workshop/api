@@ -84,6 +84,10 @@ class AccountsRepository:
         statement = select(RevokedAccessToken.jti).where(RevokedAccessToken.jti == jti)
         return self._session.execute(statement).scalar_one_or_none() is not None
 
+    def session_version_for(self, account_id: uuid.UUID) -> int | None:
+        statement = select(Account.session_version).where(Account.id == account_id)
+        return self._session.execute(statement).scalar_one_or_none()
+
     def find_token(self, token_digest: str) -> VerificationToken | None:
         statement = select(VerificationToken).where(VerificationToken.token_digest == token_digest)
         return self._session.execute(statement).scalar_one_or_none()

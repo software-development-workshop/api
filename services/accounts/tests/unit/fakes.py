@@ -23,6 +23,7 @@ class FakeAccountsRepository:
         account.id = account.id or uuid.uuid4()
         account.created_at = account.created_at or datetime.now(UTC)
         account.failed_login_attempts = account.failed_login_attempts or 0
+        account.session_version = account.session_version or 0
         self.accounts.append(account)
         return account
 
@@ -58,6 +59,10 @@ class FakeAccountsRepository:
 
     def is_access_token_revoked(self, jti: uuid.UUID) -> bool:
         return jti in self.revoked_access_tokens
+
+    def session_version_for(self, account_id: uuid.UUID) -> int | None:
+        account = next((account for account in self.accounts if account.id == account_id), None)
+        return account.session_version if account is not None else None
 
     def find_token(self, token_digest: str) -> VerificationToken | None:
         return next((t for t in self.tokens if t.token_digest == token_digest), None)

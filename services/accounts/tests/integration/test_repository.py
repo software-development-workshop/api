@@ -148,6 +148,18 @@ def test_persists_login_lockout_state(session: Session) -> None:
     assert reloaded.locked_until == locked_until
 
 
+def test_persists_the_account_session_version(session: Session) -> None:
+    repository = AccountsRepository(session)
+    stored = repository.add(account())
+    stored.session_version = 4
+
+    repository.save(stored)
+    session.expire_all()
+    reloaded = session.get(Account, stored.id)
+
+    assert reloaded.session_version == 4
+
+
 @pytest.mark.parametrize(
     "password_hash",
     [

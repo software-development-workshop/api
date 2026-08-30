@@ -122,7 +122,11 @@ def create_session(
     body: SessionRequest, repository: RepositoryDep, settings: SettingsDep
 ) -> SessionResponse:
     account = authenticate(repository, body.identifier, body.password)
-    issued = access_tokens.issue(account.id, settings.jwt_secret)
+    issued = access_tokens.issue(
+        account.id,
+        settings.jwt_secret,
+        session_version=account.session_version,
+    )
     return SessionResponse(access_token=issued.token, expires_in=issued.expires_in)
 
 

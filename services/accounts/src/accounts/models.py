@@ -30,6 +30,7 @@ class Account(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     failed_login_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    session_version: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     # Uniqueness is case-insensitive and the database owns it: a check in the service loses

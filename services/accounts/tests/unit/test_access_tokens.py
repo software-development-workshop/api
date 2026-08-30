@@ -55,6 +55,56 @@ def test_decodes_a_valid_access_token_for_revocation() -> None:
     assert claims.expires_at > datetime.now(UTC)
 
 
+def test_issues_and_decodes_the_account_session_version() -> None:
+    account_id = uuid.UUID("d3f0215c-07c1-4e55-873c-90740965713b")
+    issued = issue(account_id, SECRET, session_version=4, now=datetime.now(UTC))
+
+    claims = decode_access_token(issued.token, SECRET)
+
+    assert claims.session_version == 4
+
+
+def test_decodes_a_legacy_access_token_as_session_version_zero() -> None:
+    now = datetime.now(UTC)
+    token = jwt.encode(
+        {
+            "sub": str(uuid.uuid4()),
+            "iat": now,
+            "exp": now + timedelta(hours=1),
+            "jti": str(uuid.uuid4()),
+            "iss": "udesa-x-accounts",
+            "aud": "udesa-x",
+        },
+        SECRET,
+        algorithm="HS256",
+    )
+
+    claims = decode_access_token(token, SECRET)
+
+    assert claims.session_version == 0
+
+
+@pytest.mark.parametrize("session_version", [True, -1, "4"])
+def test_rejects_an_invalid_session_version_claim(session_version: object) -> None:
+    now = datetime.now(UTC)
+    token = jwt.encode(
+        {
+            "sub": str(uuid.uuid4()),
+            "iat": now,
+            "exp": now + timedelta(hours=1),
+            "jti": str(uuid.uuid4()),
+            "iss": "udesa-x-accounts",
+            "aud": "udesa-x",
+            "session_version": session_version,
+        },
+        SECRET,
+        algorithm="HS256",
+    )
+
+    with pytest.raises(InvalidAccessTokenError):
+        decode_access_token(token, SECRET)
+
+
 def test_rejects_an_access_token_with_an_invalid_signature() -> None:
     issued = issue(uuid.uuid4(), SECRET, now=datetime.now(UTC))
 

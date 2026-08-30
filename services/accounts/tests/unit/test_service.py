@@ -405,6 +405,22 @@ def test_validation_accepts_an_active_access_token(
     assert claims.subject == account.id
 
 
+def test_validation_rejects_an_access_token_from_an_older_session_version(
+    repository: FakeAccountsRepository, mailer: FakeMailer
+) -> None:
+    account = active_account(repository, mailer)
+    account.session_version = 4
+    stale_token = issue(
+        account.id,
+        JWT_SECRET,
+        session_version=3,
+        now=datetime.now(UTC),
+    ).token
+
+    with pytest.raises(InvalidAccessTokenError, match="Invalid access token"):
+        validate_access_token(repository, stale_token, JWT_SECRET)
+
+
 def test_validation_rejects_a_malformed_access_token(
     repository: FakeAccountsRepository,
 ) -> None:

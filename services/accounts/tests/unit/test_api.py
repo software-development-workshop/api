@@ -195,6 +195,27 @@ def test_login_issues_a_one_hour_bearer_token(
     assert claims["sub"] == str(repository.accounts[0].id)
 
 
+def test_login_issues_the_accounts_current_session_version(
+    client: TestClient, mailer: FakeMailer, repository: FakeAccountsRepository
+) -> None:
+    verify_registered_account(client, mailer)
+    repository.accounts[0].session_version = 4
+
+    response = client.post(
+        "/api/v1/sessions",
+        json={"identifier": VALID["email"], "password": VALID["password"]},
+    )
+
+    claims = jwt.decode(
+        response.json()["access_token"],
+        JWT_SECRET,
+        algorithms=["HS256"],
+        audience="udesa-x",
+        issuer="udesa-x-accounts",
+    )
+    assert claims["session_version"] == 4
+
+
 def test_login_preserves_spaces_that_are_part_of_the_password(
     client: TestClient, mailer: FakeMailer
 ) -> None:
