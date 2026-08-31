@@ -29,7 +29,7 @@ from accounts.service import (
     validate_access_token,
     verify,
 )
-from tests.fakes import FakeMailer
+from tests.fakes import FailingPasswordResetMailer, FakeMailer
 from tests.unit.fakes import FakeAccountsRepository
 
 LOGIN_TIME = datetime(2030, 1, 2, 3, 4, 5, tzinfo=UTC)
@@ -214,6 +214,18 @@ def test_password_reset_request_stores_a_ten_minute_digest(
     assert stored.token_digest == tokens.digest(raw_token)
     assert raw_token not in stored.token_digest
     assert stored.expires_at == LOGIN_TIME + timedelta(minutes=10)
+
+
+def test_password_reset_request_invalidates_the_token_when_delivery_fails(
+    repository: FakeAccountsRepository,
+    mailer: FakeMailer,
+) -> None:
+    active_account(repository, mailer)
+    failing_mailer = FailingPasswordResetMailer()
+
+    request_password_reset(repository, failing_mailer, "juan", now=LOGIN_TIME)
+
+    assert repository.password_reset_tokens[-1].used_at is not None
 
 
 def test_email_and_handle_requests_share_the_three_per_fifteen_minute_limit(
