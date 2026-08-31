@@ -1,3 +1,4 @@
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
@@ -26,6 +27,8 @@ LOGIN_LOCK_TTL = timedelta(minutes=15)
 PASSWORD_RESET_TTL = timedelta(minutes=10)
 PASSWORD_RESET_WINDOW = timedelta(minutes=15)
 PASSWORD_RESET_LIMIT = 3
+
+logger = logging.getLogger(__name__)
 
 
 class Mailer(Protocol):
@@ -186,7 +189,11 @@ def request_password_reset(
         limit=PASSWORD_RESET_LIMIT,
     )
     if issued is not None:
-        mailer.send_password_reset(account.email, raw_token)
+        try:
+            mailer.send_password_reset(account.email, raw_token)
+        except Exception:
+            logger.exception("Password reset email delivery failed")
+            repository.invalidate_password_reset(issued, invalidated_at=datetime.now(UTC))
 
 
 def reset_password(

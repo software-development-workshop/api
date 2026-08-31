@@ -16,3 +16,8 @@ class FakeMailer:
     @property
     def last_password_reset_token(self) -> str:
         return self.password_resets[-1][1]
+
+
+class FailingPasswordResetMailer(FakeMailer):
+    def send_password_reset(self, to: str, token: str) -> None:
+        raise ConnectionError("SMTP unavailable")
