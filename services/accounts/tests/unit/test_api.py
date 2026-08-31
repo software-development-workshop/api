@@ -10,6 +10,7 @@ from accounts import tokens
 from accounts.access_tokens import issue
 from accounts.api import get_mailer, get_repository
 from accounts.config import get_settings
+from accounts.errors import VerificationEmailNotSentError
 from accounts.main import app
 from accounts.models import Account
 from tests.fakes import FailingPasswordResetMailer, FakeMailer
@@ -17,6 +18,13 @@ from tests.unit.fakes import FakeAccountsRepository
 
 VALID = {"email": "juan@udesa.edu.ar", "handle": "@juan", "password": "Passw0rd"}
 JWT_SECRET = "unit-test-jwt-secret-longer-than-32-bytes"
+
+
+class RefusingMailer:
+    """Stands in for a mail provider that refuses the send."""
+
+    def send_verification(self, to: str, token: str) -> None:
+        raise VerificationEmailNotSentError("Ask for a new one from the login screen.")
 
 
 @pytest.fixture
@@ -147,6 +155,25 @@ def test_verification_link_stops_working_after_it_is_used(
 
 def test_rejects_a_token_nobody_issued(client: TestClient) -> None:
     assert client.get(f"/api/v1/verifications/{tokens.generate()}").status_code == 400
+
+
+def test_a_send_failure_leaves_the_account_and_says_so(
+    client: TestClient, repository: FakeAccountsRepository
+) -> None:
+    """The account and its token are committed before the send, so the caller keeps both.
+
+    Letting the provider's own exception escape answers 500, which names no way out of a
+    state the resend endpoint already knows how to fix.
+    """
+
+    app.dependency_overrides[get_mailer] = RefusingMailer
+
+    response = client.post("/api/v1/registrations", json=VALID)
+
+    assert response.status_code == 502
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert response.json()["type"].endswith("/verification-email-not-sent")
+    assert repository.exists_with_email(VALID["email"])
 
 
 def test_resend_sends_a_fresh_link(client: TestClient, mailer: FakeMailer) -> None:
@@ -319,6 +346,20 @@ def test_password_reset_completion_rejects_the_current_password(
 
     assert response.status_code == 400
     assert response.json()["type"].endswith("/password-unchanged")
+
+
+def test_resend_answers_the_same_when_the_send_fails(
+    client: TestClient, repository: FakeAccountsRepository
+) -> None:
+    """Only a registered address can reach a send, so its failure must not be visible here."""
+    client.post("/api/v1/registrations", json=VALID)
+    app.dependency_overrides[get_mailer] = RefusingMailer
+
+    known = client.post("/api/v1/verifications/resend", json={"email": VALID["email"]})
+    unknown = client.post("/api/v1/verifications/resend", json={"email": "nadie@udesa.edu.ar"})
+
+    assert known.status_code == unknown.status_code == 202
+    assert known.content == unknown.content
 
 
 def test_login_issues_a_one_hour_bearer_token(
