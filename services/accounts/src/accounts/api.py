@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from accounts import access_tokens
 from accounts.config import API_PREFIX, Settings, get_settings
 from accounts.db import get_session
-from accounts.email import SmtpMailer
+from accounts.email import ResendMailer
 from accounts.errors import InvalidAccessTokenError
 from accounts.models import Account
 from accounts.repository import AccountsRepository
@@ -36,7 +36,7 @@ def get_repository(session: SessionDep) -> AccountsRepository:
 
 
 def get_mailer() -> Mailer:
-    return SmtpMailer()
+    return ResendMailer()
 
 
 RepositoryDep = Annotated[AccountsRepository, Depends(get_repository)]

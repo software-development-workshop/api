@@ -20,4 +20,4 @@ class FakeMailer:
 
 class FailingPasswordResetMailer(FakeMailer):
     def send_password_reset(self, to: str, token: str) -> None:
-        raise ConnectionError("SMTP unavailable")
+        raise ConnectionError("mail provider unavailable")
