@@ -1,7 +1,7 @@
 import uuid
 from typing import Annotated, Literal, Self
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Response, status
+from fastapi import APIRouter, Depends, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr, StringConstraints, field_validator, model_validator
 from sqlalchemy.orm import Session
@@ -147,12 +147,9 @@ def resend(body: ResendRequest, repository: RepositoryDep, mailer: MailerDep) ->
 
 @router.post("/password-resets", status_code=status.HTTP_202_ACCEPTED)
 def request_reset(
-    body: PasswordResetRequest,
-    repository: RepositoryDep,
-    mailer: MailerDep,
-    background_tasks: BackgroundTasks,
+    body: PasswordResetRequest, repository: RepositoryDep, mailer: MailerDep
 ) -> Response:
-    background_tasks.add_task(request_password_reset, repository, mailer, body.identifier)
+    request_password_reset(repository, mailer, body.identifier)
     return Response(status_code=status.HTTP_202_ACCEPTED)
 
 
