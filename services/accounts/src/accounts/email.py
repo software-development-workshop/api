@@ -1,6 +1,8 @@
 import resend
+import resend.exceptions
 
 from accounts.config import API_PREFIX, get_settings
+from accounts.errors import VerificationEmailNotSentError
 
 # The provider is called inside the request that triggers it, so this is the ceiling on how
 # long that request can take. The SDK's own default is 30 seconds.
@@ -17,13 +19,22 @@ class ResendMailer:
     """
 
     def send_verification(self, to: str, token: str) -> None:
-        self._send(
-            to,
-            "Verificá tu cuenta de UdeSA-X",
-            "Para activar tu cuenta, entrá a este link:\n\n"
-            f"{get_settings().public_base_url}{API_PREFIX}/verifications/{token}\n\n"
-            "El link vence en 24 horas. Si no fuiste vos, ignorá este mensaje.",
-        )
+        # Only this mail translates its failure: registration is the one flow allowed to tell
+        # the caller the send did not happen. A reset has to answer the same either way.
+        try:
+            self._send(
+                to,
+                "Verificá tu cuenta de UdeSA-X",
+                "Para activar tu cuenta, entrá a este link:\n\n"
+                f"{get_settings().public_base_url}{API_PREFIX}/verifications/{token}\n\n"
+                "El link vence en 24 horas. Si no fuiste vos, ignorá este mensaje.",
+            )
+        except resend.exceptions.ResendError as error:
+            # Every SDK failure arrives as this one type, connection and timeout included.
+            raise VerificationEmailNotSentError(
+                "Your account was created but we could not send the verification link. "
+                "Ask for a new one from the login screen."
+            ) from error
 
     def send_password_reset(self, to: str, token: str) -> None:
         self._send(

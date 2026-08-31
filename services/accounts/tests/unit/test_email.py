@@ -2,9 +2,11 @@ from collections.abc import Iterator
 
 import pytest
 import resend
+import resend.exceptions
 
 from accounts.config import get_settings
 from accounts.email import ResendMailer
+from accounts.errors import VerificationEmailNotSentError
 from accounts.main import app
 
 ENV = {
@@ -97,3 +99,22 @@ def test_password_reset_link_points_at_the_client_and_states_its_life(
     body = sent[0]["text"]
     assert "https://api.udesax.app/reset-password?token=a-token" in body
     assert "10 minutos" in body
+
+
+def test_a_refused_send_is_reported_in_the_language_of_the_domain(
+    sent: list[dict[str, str]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Letting the SDK's own exception escape reaches the caller as an unexplained 500."""
+
+    def refuse(_: dict[str, str]) -> dict[str, str]:
+        raise resend.exceptions.ResendError(
+            code=403,
+            error_type="validation_error",
+            message="The udesax.app domain is not verified.",
+            suggested_action="Verify the domain.",
+        )
+
+    monkeypatch.setattr(resend.Emails, "send", refuse)
+
+    with pytest.raises(VerificationEmailNotSentError):
+        ResendMailer().send_verification("juan@udesa.edu.ar", "a-token")
