@@ -189,6 +189,24 @@ def test_persists_the_account_session_version(session: Session) -> None:
     assert reloaded.session_version == 4
 
 
+def test_only_exposes_the_session_version_for_an_active_account(session: Session) -> None:
+    repository = AccountsRepository(session)
+    stored = repository.add(account())
+
+    assert repository.active_session_version_for(stored.id) == 0
+
+    stored.suspended_at = datetime.now(UTC)
+    repository.save(stored)
+
+    assert repository.active_session_version_for(stored.id) is None
+
+    stored.suspended_at = None
+    stored.deleted_at = datetime.now(UTC)
+    repository.save(stored)
+
+    assert repository.active_session_version_for(stored.id) is None
+
+
 @pytest.mark.parametrize(
     "password_hash",
     [

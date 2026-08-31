@@ -64,9 +64,11 @@ class FakeAccountsRepository:
     def is_access_token_revoked(self, jti: uuid.UUID) -> bool:
         return jti in self.revoked_access_tokens
 
-    def session_version_for(self, account_id: uuid.UUID) -> int | None:
+    def active_session_version_for(self, account_id: uuid.UUID) -> int | None:
         account = next((account for account in self.accounts if account.id == account_id), None)
-        return account.session_version if account is not None else None
+        if account is None or account.suspended_at is not None or account.deleted_at is not None:
+            return None
+        return account.session_version
 
     def find_password_reset(self, token_digest: str) -> PasswordResetToken | None:
         return next(

@@ -1,4 +1,5 @@
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import jwt
@@ -6,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from accounts import tokens
+from accounts.access_tokens import issue
 from accounts.api import get_mailer, get_repository
 from accounts.config import get_settings
 from accounts.main import app
@@ -362,6 +364,121 @@ def test_login_issues_the_accounts_current_session_version(
         issuer="udesa-x-accounts",
     )
     assert claims["session_version"] == 4
+
+
+def test_introspection_returns_the_active_account_id(
+    client: TestClient,
+    mailer: FakeMailer,
+    repository: FakeAccountsRepository,
+) -> None:
+    verify_registered_account(client, mailer)
+    login = client.post(
+        "/api/v1/sessions",
+        json={"identifier": VALID["email"], "password": VALID["password"]},
+    )
+
+    response = client.post(
+        "/api/v1/sessions/introspect",
+        headers={"Authorization": f"Bearer {login.json()['access_token']}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"account_id": str(repository.accounts[0].id)}
+
+
+@pytest.mark.parametrize("headers", [{}, {"Authorization": "Bearer malformed"}])
+def test_introspection_rejects_a_missing_or_malformed_bearer_token(
+    client: TestClient,
+    headers: dict[str, str],
+) -> None:
+    response = client.post("/api/v1/sessions/introspect", headers=headers)
+
+    assert response.status_code == 401
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert response.json()["type"].endswith("/invalid-access-token")
+
+
+def test_introspection_rejects_an_expired_access_token(
+    client: TestClient,
+    mailer: FakeMailer,
+    repository: FakeAccountsRepository,
+) -> None:
+    verify_registered_account(client, mailer)
+    expired = issue(
+        repository.accounts[0].id,
+        JWT_SECRET,
+        now=datetime.now(UTC) - timedelta(hours=2),
+    ).token
+
+    response = client.post(
+        "/api/v1/sessions/introspect",
+        headers={"Authorization": f"Bearer {expired}"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["type"].endswith("/invalid-access-token")
+
+
+def test_introspection_rejects_a_revoked_access_token(
+    client: TestClient,
+    mailer: FakeMailer,
+) -> None:
+    verify_registered_account(client, mailer)
+    login = client.post(
+        "/api/v1/sessions",
+        json={"identifier": VALID["email"], "password": VALID["password"]},
+    )
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    client.post("/api/v1/sessions/logout", headers=headers)
+
+    response = client.post("/api/v1/sessions/introspect", headers=headers)
+
+    assert response.status_code == 401
+    assert response.json()["type"].endswith("/invalid-access-token")
+
+
+def test_introspection_rejects_an_access_token_from_an_older_session_version(
+    client: TestClient,
+    mailer: FakeMailer,
+    repository: FakeAccountsRepository,
+) -> None:
+    verify_registered_account(client, mailer)
+    login = client.post(
+        "/api/v1/sessions",
+        json={"identifier": VALID["email"], "password": VALID["password"]},
+    )
+    repository.accounts[0].session_version += 1
+
+    response = client.post(
+        "/api/v1/sessions/introspect",
+        headers={"Authorization": f"Bearer {login.json()['access_token']}"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["type"].endswith("/invalid-access-token")
+
+
+@pytest.mark.parametrize("state", ["suspended", "deleted"])
+def test_introspection_rejects_an_access_token_for_an_unusable_account(
+    client: TestClient,
+    mailer: FakeMailer,
+    repository: FakeAccountsRepository,
+    state: str,
+) -> None:
+    verify_registered_account(client, mailer)
+    login = client.post(
+        "/api/v1/sessions",
+        json={"identifier": VALID["email"], "password": VALID["password"]},
+    )
+    setattr(repository.accounts[0], f"{state}_at", datetime.now(UTC))
+
+    response = client.post(
+        "/api/v1/sessions/introspect",
+        headers={"Authorization": f"Bearer {login.json()['access_token']}"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["type"].endswith("/invalid-access-token")
 
 
 def test_login_preserves_spaces_that_are_part_of_the_password(

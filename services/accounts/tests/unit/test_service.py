@@ -578,6 +578,20 @@ def test_validation_accepts_an_active_access_token(
     assert claims.subject == account.id
 
 
+@pytest.mark.parametrize("state", ["suspended", "deleted"])
+def test_validation_rejects_an_access_token_for_an_unusable_account(
+    repository: FakeAccountsRepository,
+    mailer: FakeMailer,
+    state: str,
+) -> None:
+    account = active_account(repository, mailer)
+    token = issue(account.id, JWT_SECRET, now=datetime.now(UTC)).token
+    setattr(account, f"{state}_at", datetime.now(UTC))
+
+    with pytest.raises(InvalidAccessTokenError, match="Invalid access token"):
+        validate_access_token(repository, token, JWT_SECRET)
+
+
 def test_validation_rejects_an_access_token_from_an_older_session_version(
     repository: FakeAccountsRepository, mailer: FakeMailer
 ) -> None:
