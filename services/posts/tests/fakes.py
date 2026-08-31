@@ -5,10 +5,17 @@ from posts.models import Post
 
 
 class FakeIdentityProvider:
-    def __init__(self, account_id: uuid.UUID | None = None) -> None:
+    def __init__(
+        self,
+        account_id: uuid.UUID | None = None,
+        error: Exception | None = None,
+    ) -> None:
         self.account_id = account_id or uuid.uuid4()
+        self.error = error
 
     def introspect(self, token: str) -> uuid.UUID:
+        if self.error is not None:
+            raise self.error
         return self.account_id
 
 

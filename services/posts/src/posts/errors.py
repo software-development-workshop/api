@@ -28,6 +28,18 @@ class PostRateLimitExceededError(DomainError):
     title = "Post rate limit exceeded"
 
 
+class InvalidAccessTokenError(DomainError):
+    status = 401
+    slug = "invalid-access-token"
+    title = "Invalid access token"
+
+
+class AccountsUnavailableError(DomainError):
+    status = 503
+    slug = "accounts-unavailable"
+    title = "Accounts unavailable"
+
+
 def _problem(status: int, slug: str, title: str, detail: str, **extra: object) -> JSONResponse:
     body = {
         "type": f"{PROBLEM_BASE}/{slug}",

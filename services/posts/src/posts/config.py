@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import AnyHttpUrl, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 API_PREFIX = "/api/v1"
@@ -13,6 +14,9 @@ class Settings(BaseSettings):
     db_name: str
     db_user: str
     db_password: str
+
+    accounts_base_url: AnyHttpUrl
+    accounts_timeout_seconds: float = Field(gt=0, le=10)
 
     @property
     def database_url(self) -> str:
