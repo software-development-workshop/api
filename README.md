@@ -10,6 +10,7 @@ containerised and owns its own database; they share a repository, not a runtime.
 | Service | Stack | Port |
 |---|---|---|
 | [accounts](services/accounts) | Python 3.13 + FastAPI | 8000 |
+| [posts](services/posts) | Python 3.13 + FastAPI | 8001 |
 
 ## Run it
 
@@ -27,8 +28,9 @@ docker compose up --build
 On a POSIX shell, use `export JWT_SECRET="$(openssl rand -base64 32)"` before the same
 Compose command. The value is local and must never be committed.
 
-The API docs are then at <http://localhost:8000/docs>, and the verification emails land in
-the Mailpit inbox at <http://localhost:8025> — nothing leaves the machine while developing.
+The Accounts API docs are at <http://localhost:8000/docs>, Posts API docs are at
+<http://localhost:8001/docs>, and verification emails land in the Mailpit inbox at
+<http://localhost:8025> — nothing leaves the machine while developing.
 
 ## Work on a service
 
@@ -58,6 +60,43 @@ To run the service against that database, with migrations applied:
 ```bash
 uv run alembic upgrade head
 uv run uvicorn accounts.main:app --reload
+```
+
+Posts is another self-contained `uv` project. Its integration database is published on 5434:
+
+```powershell
+$env:JWT_SECRET = "integration-test-jwt-secret-32-bytes-minimum"
+docker compose up -d posts-db
+Set-Location services/posts
+$env:DB_HOST = "127.0.0.1"
+$env:DB_PORT = "5434"
+$env:DB_NAME = "posts"
+$env:DB_USER = "posts"
+$env:DB_PASSWORD = "posts"
+$env:ACCOUNTS_BASE_URL = "http://localhost:8000"
+$env:ACCOUNTS_TIMEOUT_SECONDS = "2"
+uv sync
+uv run pytest tests/unit --cov=src --cov-fail-under=85
+uv run pytest tests/integration
+```
+
+To run Posts outside Compose against those local services:
+
+```powershell
+uv run alembic upgrade head
+uv run uvicorn posts.main:app --host 127.0.0.1 --port 8001
+```
+
+Given an already verified account, the authenticated publish request is:
+
+```powershell
+$loginBody = @{ identifier = "@juan"; password = "Passw0rd" } | ConvertTo-Json
+$session = Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/v1/sessions `
+  -ContentType "application/json" -Body $loginBody
+$headers = @{ Authorization = "Bearer $($session.access_token)" }
+$postBody = @{ content = "Mi primera publicación" } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri http://localhost:8001/api/v1/posts `
+  -Headers $headers -ContentType "application/json" -Body $postBody
 ```
 
 ## How we work
