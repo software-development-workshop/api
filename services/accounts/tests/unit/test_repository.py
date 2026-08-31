@@ -1,8 +1,10 @@
+import uuid
+
 import pytest
 from sqlalchemy.exc import IntegrityError
 
 from accounts.errors import EmailAlreadyRegisteredError, HandleTakenError
-from accounts.models import Account
+from accounts.models import Account, PasswordResetToken
 from accounts.repository import AccountsRepository
 
 
@@ -35,6 +37,29 @@ class CommitOnceFailingSession:
 
     def refresh(self, _: Account) -> None:
         pass
+
+
+class ScalarResult:
+    def __init__(self, value: object) -> None:
+        self.value = value
+
+    def scalar_one_or_none(self) -> object:
+        return self.value
+
+
+class LookupSession:
+    def __init__(self, value: object) -> None:
+        self.value = value
+        self.statements: list[object] = []
+        self.get_calls: list[tuple[object, uuid.UUID]] = []
+
+    def execute(self, statement: object) -> ScalarResult:
+        self.statements.append(statement)
+        return ScalarResult(self.value)
+
+    def get(self, model: object, account_id: uuid.UUID) -> object:
+        self.get_calls.append((model, account_id))
+        return self.value
 
 
 @pytest.mark.parametrize(
@@ -81,3 +106,52 @@ def test_unrelated_integrity_error_is_raised_after_rollback() -> None:
         repository.add(Account(email="juan@udesa.edu.ar", handle="juan", password_hash="hash"))
 
     assert session.rollback_calls == 1
+
+
+@pytest.mark.parametrize(
+    ("identifier", "column", "canonical"),
+    [
+        (" JUAN@UdeSA.edu.AR ", "email", "juan@udesa.edu.ar"),
+        (" @JUAN ", "handle", "juan"),
+        (" JUAN ", "handle", "juan"),
+    ],
+)
+def test_password_reset_identifier_lookup_normalises_email_or_handle(
+    identifier: str,
+    column: str,
+    canonical: str,
+) -> None:
+    account = Account(email="juan@udesa.edu.ar", handle="juan", password_hash="hash")
+    session = LookupSession(account)
+
+    found = AccountsRepository(session).find_by_identifier(identifier)  # type: ignore[arg-type]
+
+    statement = session.statements[0]
+    compiled = statement.compile()
+    assert found is account
+    assert f"lower(accounts.{column})" in str(statement)
+    assert canonical in compiled.params.values()
+
+
+def test_password_reset_lookup_uses_the_token_digest() -> None:
+    record = PasswordResetToken(account_id=uuid.uuid4(), token_digest="a" * 64)
+    session = LookupSession(record)
+
+    found = AccountsRepository(session).find_password_reset("a" * 64)  # type: ignore[arg-type]
+
+    compiled = session.statements[0].compile()
+    assert found is record
+    assert "a" * 64 in compiled.params.values()
+
+
+def test_password_reset_account_lookup_uses_the_account_id() -> None:
+    account_id = uuid.uuid4()
+    account = Account(id=account_id, email="juan@udesa.edu.ar", handle="juan")
+    session = LookupSession(account)
+
+    found = AccountsRepository(session).account_for_password_reset(  # type: ignore[arg-type]
+        account_id
+    )
+
+    assert found is account
+    assert session.get_calls == [(Account, account_id)]

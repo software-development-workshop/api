@@ -1,7 +1,7 @@
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
-from accounts.models import Account, VerificationToken
+from accounts.models import Account, PasswordResetToken, VerificationToken
 
 
 class FakeAccountsRepository:
@@ -14,6 +14,7 @@ class FakeAccountsRepository:
     def __init__(self, accounts: list[Account] | None = None) -> None:
         self.accounts = accounts or []
         self.tokens: list[VerificationToken] = []
+        self.password_reset_tokens: list[PasswordResetToken] = []
         self.completed_login_attempts = 0
         self.revoked_access_tokens: dict[uuid.UUID, datetime] = {}
 
@@ -23,6 +24,7 @@ class FakeAccountsRepository:
         account.id = account.id or uuid.uuid4()
         account.created_at = account.created_at or datetime.now(UTC)
         account.failed_login_attempts = account.failed_login_attempts or 0
+        account.session_version = account.session_version or 0
         self.accounts.append(account)
         return account
 
@@ -46,6 +48,9 @@ class FakeAccountsRepository:
             return next((a for a in self.accounts if a.email.lower() == canonical), None)
         return next((a for a in self.accounts if a.handle.lower() == canonical), None)
 
+    def find_by_identifier(self, identifier: str) -> Account | None:
+        return self.find_for_login(identifier)
+
     def save(self, account: Account) -> Account:
         return account
 
@@ -58,6 +63,71 @@ class FakeAccountsRepository:
 
     def is_access_token_revoked(self, jti: uuid.UUID) -> bool:
         return jti in self.revoked_access_tokens
+
+    def session_version_for(self, account_id: uuid.UUID) -> int | None:
+        account = next((account for account in self.accounts if account.id == account_id), None)
+        return account.session_version if account is not None else None
+
+    def find_password_reset(self, token_digest: str) -> PasswordResetToken | None:
+        return next(
+            (token for token in self.password_reset_tokens if token.token_digest == token_digest),
+            None,
+        )
+
+    def account_for_password_reset(self, account_id: uuid.UUID) -> Account | None:
+        return next((account for account in self.accounts if account.id == account_id), None)
+
+    def issue_password_reset(
+        self,
+        token: PasswordResetToken,
+        *,
+        window: timedelta,
+        limit: int,
+    ) -> PasswordResetToken | None:
+        issued_in_window = [
+            existing
+            for existing in self.password_reset_tokens
+            if existing.account_id == token.account_id
+            and existing.created_at >= token.created_at - window
+        ]
+        if len(issued_in_window) >= limit:
+            return None
+        for live in self.password_reset_tokens:
+            if live.account_id == token.account_id and live.used_at is None:
+                live.used_at = token.created_at
+        token.id = token.id or uuid.uuid4()
+        self.password_reset_tokens.append(token)
+        return token
+
+    def invalidate_password_reset(
+        self,
+        token: PasswordResetToken,
+        *,
+        invalidated_at: datetime,
+    ) -> None:
+        if token.used_at is None:
+            token.used_at = invalidated_at
+
+    def consume_password_reset(
+        self,
+        token: PasswordResetToken,
+        password_hash: str,
+        *,
+        changed_at: datetime,
+    ) -> Account | None:
+        if token.used_at is not None:
+            return None
+        account = self.account_for_password_reset(token.account_id)
+        if account is None:
+            raise LookupError("password reset token points at a missing account")
+        for live in self.password_reset_tokens:
+            if live.account_id == token.account_id and live.used_at is None:
+                live.used_at = changed_at
+        account.password_hash = password_hash
+        account.session_version += 1
+        account.failed_login_attempts = 0
+        account.locked_until = None
+        return account
 
     def find_token(self, token_digest: str) -> VerificationToken | None:
         return next((t for t in self.tokens if t.token_digest == token_digest), None)

@@ -103,3 +103,21 @@ class ExpiredVerificationTokenError(DomainError):
     status = 410
     slug = "expired-verification-token"
     title = "Verification token expired"
+
+
+class InvalidPasswordResetTokenError(DomainError):
+    status = 400
+    slug = "invalid-password-reset-token"
+    title = "Invalid password reset token"
+
+
+class ExpiredPasswordResetTokenError(DomainError):
+    status = 410
+    slug = "expired-password-reset-token"
+    title = "Password reset token expired"
+
+
+class PasswordUnchangedError(DomainError):
+    status = 400
+    slug = "password-unchanged"
+    title = "Password unchanged"

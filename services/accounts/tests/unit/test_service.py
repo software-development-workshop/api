@@ -7,11 +7,14 @@ from accounts.access_tokens import issue
 from accounts.errors import (
     AccountTemporarilyLockedError,
     EmailAlreadyRegisteredError,
+    ExpiredPasswordResetTokenError,
     ExpiredVerificationTokenError,
     HandleTakenError,
     InvalidAccessTokenError,
     InvalidCredentialsError,
+    InvalidPasswordResetTokenError,
     InvalidVerificationTokenError,
+    PasswordUnchangedError,
     SuspendedAccountError,
     UnverifiedAccountError,
 )
@@ -19,12 +22,14 @@ from accounts.models import Account
 from accounts.service import (
     authenticate,
     register,
+    request_password_reset,
     resend_verification,
+    reset_password,
     revoke_access_token,
     validate_access_token,
     verify,
 )
-from tests.fakes import FakeMailer
+from tests.fakes import FailingPasswordResetMailer, FakeMailer
 from tests.unit.fakes import FakeAccountsRepository
 
 LOGIN_TIME = datetime(2030, 1, 2, 3, 4, 5, tzinfo=UTC)
@@ -178,6 +183,174 @@ def test_resend_stays_silent_for_an_address_nobody_registered(
     resend_verification(repository, mailer, "nadie@udesa.edu.ar")
 
     assert mailer.sent == []
+
+
+@pytest.mark.parametrize(
+    "identifier",
+    ["juan@udesa.edu.ar", "JUAN@UdeSA.edu.AR", "@juan", "@JUAN", "juan"],
+)
+def test_password_reset_request_accepts_email_or_handle(
+    repository: FakeAccountsRepository,
+    mailer: FakeMailer,
+    identifier: str,
+) -> None:
+    account = active_account(repository, mailer)
+
+    request_password_reset(repository, mailer, identifier, now=LOGIN_TIME)
+
+    assert [to for to, _ in mailer.password_resets] == [account.email]
+
+
+def test_password_reset_request_stores_a_ten_minute_digest(
+    repository: FakeAccountsRepository,
+    mailer: FakeMailer,
+) -> None:
+    active_account(repository, mailer)
+
+    request_password_reset(repository, mailer, "juan", now=LOGIN_TIME)
+
+    raw_token = mailer.last_password_reset_token
+    stored = repository.password_reset_tokens[0]
+    assert stored.token_digest == tokens.digest(raw_token)
+    assert raw_token not in stored.token_digest
+    assert stored.expires_at == LOGIN_TIME + timedelta(minutes=10)
+
+
+def test_password_reset_request_invalidates_the_token_when_delivery_fails(
+    repository: FakeAccountsRepository,
+    mailer: FakeMailer,
+) -> None:
+    active_account(repository, mailer)
+    failing_mailer = FailingPasswordResetMailer()
+
+    request_password_reset(repository, failing_mailer, "juan", now=LOGIN_TIME)
+
+    assert repository.password_reset_tokens[-1].used_at is not None
+
+
+def test_email_and_handle_requests_share_the_three_per_fifteen_minute_limit(
+    repository: FakeAccountsRepository,
+    mailer: FakeMailer,
+) -> None:
+    active_account(repository, mailer)
+
+    for identifier in ["juan@udesa.edu.ar", "@juan", "JUAN", "JUAN@UDESA.EDU.AR"]:
+        request_password_reset(repository, mailer, identifier, now=LOGIN_TIME)
+
+    live = [token for token in repository.password_reset_tokens if token.used_at is None]
+    assert len(mailer.password_resets) == 3
+    assert len(repository.password_reset_tokens) == 3
+    assert len(live) == 1
+
+
+@pytest.mark.parametrize("state", ["unknown", "unverified", "suspended", "deleted"])
+def test_password_reset_request_stays_silent_for_an_ineligible_account(
+    repository: FakeAccountsRepository,
+    mailer: FakeMailer,
+    state: str,
+) -> None:
+    if state != "unknown":
+        account = sign_up(repository, mailer)
+        if state != "unverified":
+            account.verified_at = LOGIN_TIME
+            setattr(account, f"{state}_at", LOGIN_TIME)
+
+    request_password_reset(repository, mailer, "juan", now=LOGIN_TIME)
+
+    assert mailer.password_resets == []
+
+
+def test_password_reset_changes_login_password_and_rejects_previous_jwts(
+    repository: FakeAccountsRepository,
+    mailer: FakeMailer,
+) -> None:
+    account = active_account(repository, mailer)
+    account.failed_login_attempts = 5
+    account.locked_until = LOGIN_TIME + timedelta(minutes=15)
+    old_access_token = issue(
+        account.id,
+        JWT_SECRET,
+        session_version=account.session_version,
+        now=datetime.now(UTC),
+    ).token
+    request_password_reset(repository, mailer, account.email, now=LOGIN_TIME)
+
+    changed = reset_password(
+        repository,
+        mailer.last_password_reset_token,
+        "NewPassw0rd",
+        now=LOGIN_TIME + timedelta(minutes=1),
+    )
+
+    with pytest.raises(InvalidCredentialsError):
+        authenticate(repository, account.email, "Passw0rd", now=LOGIN_TIME)
+    assert authenticate(repository, account.email, "NewPassw0rd", now=LOGIN_TIME) is account
+    with pytest.raises(InvalidAccessTokenError):
+        validate_access_token(repository, old_access_token, JWT_SECRET)
+    assert changed.session_version == 1
+    assert changed.failed_login_attempts == 0
+    assert changed.locked_until is None
+
+
+def test_password_reset_rejects_a_token_nobody_issued(
+    repository: FakeAccountsRepository,
+) -> None:
+    with pytest.raises(InvalidPasswordResetTokenError):
+        reset_password(repository, tokens.generate(), "NewPassw0rd", now=LOGIN_TIME)
+
+
+def test_password_reset_token_works_only_once(
+    repository: FakeAccountsRepository,
+    mailer: FakeMailer,
+) -> None:
+    active_account(repository, mailer)
+    request_password_reset(repository, mailer, "juan", now=LOGIN_TIME)
+    raw_token = mailer.last_password_reset_token
+    reset_password(repository, raw_token, "NewPassw0rd", now=LOGIN_TIME + timedelta(minutes=1))
+
+    with pytest.raises(InvalidPasswordResetTokenError):
+        reset_password(
+            repository, raw_token, "AnotherPassw0rd", now=LOGIN_TIME + timedelta(minutes=2)
+        )
+
+
+def test_password_reset_rejects_a_token_at_its_expiration_time(
+    repository: FakeAccountsRepository,
+    mailer: FakeMailer,
+) -> None:
+    active_account(repository, mailer)
+    request_password_reset(repository, mailer, "juan", now=LOGIN_TIME)
+
+    with pytest.raises(ExpiredPasswordResetTokenError):
+        reset_password(
+            repository,
+            mailer.last_password_reset_token,
+            "NewPassw0rd",
+            now=LOGIN_TIME + timedelta(minutes=10),
+        )
+
+
+def test_rejecting_the_current_password_keeps_the_reset_link_usable(
+    repository: FakeAccountsRepository,
+    mailer: FakeMailer,
+) -> None:
+    active_account(repository, mailer)
+    request_password_reset(repository, mailer, "juan", now=LOGIN_TIME)
+    raw_token = mailer.last_password_reset_token
+
+    with pytest.raises(PasswordUnchangedError):
+        reset_password(repository, raw_token, "Passw0rd", now=LOGIN_TIME + timedelta(minutes=1))
+
+    assert repository.find_password_reset(tokens.digest(raw_token)).used_at is None
+    assert (
+        reset_password(
+            repository,
+            raw_token,
+            "NewPassw0rd",
+            now=LOGIN_TIME + timedelta(minutes=2),
+        ).session_version
+        == 1
+    )
 
 
 def test_resend_stays_silent_for_an_already_verified_account(
@@ -403,6 +576,22 @@ def test_validation_accepts_an_active_access_token(
     claims = validate_access_token(repository, token, JWT_SECRET)
 
     assert claims.subject == account.id
+
+
+def test_validation_rejects_an_access_token_from_an_older_session_version(
+    repository: FakeAccountsRepository, mailer: FakeMailer
+) -> None:
+    account = active_account(repository, mailer)
+    account.session_version = 4
+    stale_token = issue(
+        account.id,
+        JWT_SECRET,
+        session_version=3,
+        now=datetime.now(UTC),
+    ).token
+
+    with pytest.raises(InvalidAccessTokenError, match="Invalid access token"):
+        validate_access_token(repository, stale_token, JWT_SECRET)
 
 
 def test_validation_rejects_a_malformed_access_token(

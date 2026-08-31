@@ -86,3 +86,32 @@ def test_connects_to_the_configured_server(smtp: type[FakeSmtp]) -> None:
     SmtpMailer().send_verification("juan@udesa.edu.ar", "a-token")
 
     assert smtp.connections == [("smtp", 1025)]
+
+
+def test_password_reset_email_uses_the_configured_addresses_and_subject(
+    smtp: type[FakeSmtp],
+) -> None:
+    SmtpMailer().send_password_reset("juan@udesa.edu.ar", "a-token")
+
+    message = smtp.sent[0]
+    assert message["From"] == "no-reply@udesa-x.dev"
+    assert message["To"] == "juan@udesa.edu.ar"
+    assert message["Subject"] == "Restablecé tu contraseña de UdeSA-X"
+
+
+def test_password_reset_email_contains_the_client_link_and_expiration(
+    smtp: type[FakeSmtp],
+) -> None:
+    SmtpMailer().send_password_reset("juan@udesa.edu.ar", "a-token")
+
+    body = smtp.sent[0].get_content()
+    assert "https://api.udesa-x.dev/reset-password?token=a-token" in body
+    assert "10 minutos" in body
+
+
+def test_password_reset_email_connects_to_the_configured_server(
+    smtp: type[FakeSmtp],
+) -> None:
+    SmtpMailer().send_password_reset("juan@udesa.edu.ar", "a-token")
+
+    assert smtp.connections == [("smtp", 1025)]

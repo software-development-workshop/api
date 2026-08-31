@@ -1,9 +1,9 @@
 import uuid
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Self
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, EmailStr, StringConstraints, field_validator
+from pydantic import BaseModel, EmailStr, StringConstraints, field_validator, model_validator
 from sqlalchemy.orm import Session
 
 from accounts import access_tokens
@@ -16,7 +16,9 @@ from accounts.service import (
     Mailer,
     authenticate,
     register,
+    request_password_reset,
     resend_verification,
+    reset_password,
     revoke_access_token,
     verify,
 )
@@ -83,6 +85,26 @@ class SessionResponse(BaseModel):
     expires_in: int
 
 
+class PasswordResetRequest(BaseModel):
+    identifier: Identifier
+
+
+class PasswordResetCompletion(BaseModel):
+    new_password: Password
+    password_confirmation: Password
+
+    @field_validator("new_password")
+    @classmethod
+    def _check_password(cls, value: str) -> str:
+        return validate_password(value)
+
+    @model_validator(mode="after")
+    def _passwords_match(self) -> Self:
+        if self.new_password != self.password_confirmation:
+            raise ValueError("password confirmation must match the new password")
+        return self
+
+
 class AccountResponse(BaseModel):
     id: uuid.UUID
     email: str
@@ -117,12 +139,37 @@ def resend(body: ResendRequest, repository: RepositoryDep, mailer: MailerDep) ->
     return Response(status_code=status.HTTP_202_ACCEPTED)
 
 
+@router.post("/password-resets", status_code=status.HTTP_202_ACCEPTED)
+def request_reset(
+    body: PasswordResetRequest,
+    repository: RepositoryDep,
+    mailer: MailerDep,
+    background_tasks: BackgroundTasks,
+) -> Response:
+    background_tasks.add_task(request_password_reset, repository, mailer, body.identifier)
+    return Response(status_code=status.HTTP_202_ACCEPTED)
+
+
+@router.post("/password-resets/{token}", status_code=status.HTTP_204_NO_CONTENT)
+def complete_reset(
+    token: str,
+    body: PasswordResetCompletion,
+    repository: RepositoryDep,
+) -> Response:
+    reset_password(repository, token, body.new_password)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.post("/sessions")
 def create_session(
     body: SessionRequest, repository: RepositoryDep, settings: SettingsDep
 ) -> SessionResponse:
     account = authenticate(repository, body.identifier, body.password)
-    issued = access_tokens.issue(account.id, settings.jwt_secret)
+    issued = access_tokens.issue(
+        account.id,
+        settings.jwt_secret,
+        session_version=account.session_version,
+    )
     return SessionResponse(access_token=issued.token, expires_in=issued.expires_in)
 
 
