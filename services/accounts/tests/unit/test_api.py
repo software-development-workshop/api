@@ -10,7 +10,7 @@ from accounts.api import get_mailer, get_repository
 from accounts.config import get_settings
 from accounts.main import app
 from accounts.models import Account
-from tests.fakes import FakeMailer
+from tests.fakes import FailingPasswordResetMailer, FakeMailer
 from tests.unit.fakes import FakeAccountsRepository
 
 VALID = {"email": "juan@udesa.edu.ar", "handle": "@juan", "password": "Passw0rd"}
@@ -183,6 +183,22 @@ def test_password_reset_request_answers_the_same_for_known_and_unknown_identifie
     assert known.status_code == unknown.status_code == 202
     assert known.content == unknown.content == b""
     assert len(mailer.password_resets) == 1
+
+
+def test_password_reset_request_stays_generic_when_email_delivery_fails(
+    client: TestClient,
+    mailer: FakeMailer,
+    repository: FakeAccountsRepository,
+) -> None:
+    verify_registered_account(client, mailer)
+    failing_mailer = FailingPasswordResetMailer()
+    app.dependency_overrides[get_mailer] = lambda: failing_mailer
+
+    response = client.post("/api/v1/password-resets", json={"identifier": "juan"})
+
+    assert response.status_code == 202
+    assert response.content == b""
+    assert repository.password_reset_tokens[-1].used_at is not None
 
 
 def test_password_reset_completion_returns_no_content(

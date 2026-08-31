@@ -99,6 +99,15 @@ class FakeAccountsRepository:
         self.password_reset_tokens.append(token)
         return token
 
+    def invalidate_password_reset(
+        self,
+        token: PasswordResetToken,
+        *,
+        invalidated_at: datetime,
+    ) -> None:
+        if token.used_at is None:
+            token.used_at = invalidated_at
+
     def consume_password_reset(
         self,
         token: PasswordResetToken,

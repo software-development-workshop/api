@@ -145,6 +145,20 @@ class AccountsRepository:
         self._session.refresh(token)
         return token
 
+    def invalidate_password_reset(
+        self,
+        token: PasswordResetToken,
+        *,
+        invalidated_at: datetime,
+    ) -> None:
+        self._session.execute(
+            update(PasswordResetToken)
+            .where(PasswordResetToken.id == token.id)
+            .where(PasswordResetToken.used_at.is_(None))
+            .values(used_at=invalidated_at)
+        )
+        self._session.commit()
+
     def consume_password_reset(
         self,
         token: PasswordResetToken,
