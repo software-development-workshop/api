@@ -53,7 +53,7 @@ def validate_access_token(
         raise InvalidAccessTokenError("Invalid access token.") from error
     if repository.is_access_token_revoked(claims.jti):
         raise InvalidAccessTokenError("Invalid access token.")
-    if repository.session_version_for(claims.subject) != claims.session_version:
+    if repository.active_session_version_for(claims.subject) != claims.session_version:
         raise InvalidAccessTokenError("Invalid access token.")
     return claims
 

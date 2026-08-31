@@ -10,6 +10,7 @@ from accounts import access_tokens
 from accounts.config import API_PREFIX, Settings, get_settings
 from accounts.db import get_session
 from accounts.email import SmtpMailer
+from accounts.errors import InvalidAccessTokenError
 from accounts.models import Account
 from accounts.repository import AccountsRepository
 from accounts.service import (
@@ -20,6 +21,7 @@ from accounts.service import (
     resend_verification,
     reset_password,
     revoke_access_token,
+    validate_access_token,
     verify,
 )
 from accounts.validation import normalise_handle, validate_password
@@ -83,6 +85,10 @@ class SessionResponse(BaseModel):
     access_token: str
     token_type: Literal["bearer"] = "bearer"  # noqa: S105
     expires_in: int
+
+
+class SessionIntrospectionResponse(BaseModel):
+    account_id: uuid.UUID
 
 
 class PasswordResetRequest(BaseModel):
@@ -170,6 +176,19 @@ def create_session(
         session_version=account.session_version,
     )
     return SessionResponse(access_token=issued.token, expires_in=issued.expires_in)
+
+
+@router.post("/sessions/introspect")
+def introspect_session(
+    credentials: BearerDep,
+    repository: RepositoryDep,
+    settings: SettingsDep,
+) -> SessionIntrospectionResponse:
+    token = credentials.credentials if credentials is not None else None
+    if token is None:
+        raise InvalidAccessTokenError("Invalid access token.")
+    claims = validate_access_token(repository, token, settings.jwt_secret)
+    return SessionIntrospectionResponse(account_id=claims.subject)
 
 
 @router.post("/sessions/logout", status_code=status.HTTP_204_NO_CONTENT)
