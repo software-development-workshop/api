@@ -9,10 +9,9 @@ BASE_SETTINGS = {
     "db_name": "accounts",
     "db_user": "accounts",
     "db_password": "accounts",
-    "smtp_host": "smtp",
-    "smtp_port": 1025,
-    "smtp_from": "no-reply@udesa-x.dev",
-    "public_base_url": "https://api.udesa-x.dev",
+    "resend_api_key": "re_a_test_key",
+    "mail_from": "no-reply@udesax.app",
+    "public_base_url": "https://api.udesax.app",
 }
 
 

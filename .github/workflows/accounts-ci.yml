@@ -54,9 +54,9 @@ jobs:
       DB_NAME: accounts
       DB_USER: accounts
       DB_PASSWORD: accounts
-      SMTP_HOST: localhost
-      SMTP_PORT: "1025"
-      SMTP_FROM: no-reply@udesa-x.dev
+      # Required by Settings, unused by the tests: they run against FakeMailer.
+      RESEND_API_KEY: not-a-real-key
+      MAIL_FROM: no-reply@udesax.app
       PUBLIC_BASE_URL: http://localhost:8000
       JWT_SECRET: integration-test-jwt-secret-32-bytes-minimum
 
