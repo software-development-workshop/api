@@ -16,6 +16,7 @@ from accounts.errors import (
     PasswordUnchangedError,
     SuspendedAccountError,
     UnverifiedAccountError,
+    VerificationEmailNotSentError,
 )
 from accounts.models import Account, PasswordResetToken, VerificationToken
 from accounts.passwords import hash_password, verify_password
@@ -158,7 +159,12 @@ def resend_verification(repository: AccountsRepository, mailer: Mailer, email: s
     account = repository.find_by_email(email)
     if account is None or account.verified_at is not None:
         return
-    _issue_verification(repository, mailer, account)
+    try:
+        _issue_verification(repository, mailer, account)
+    except VerificationEmailNotSentError:
+        # Only an address that has an account can reach a send at all, so surfacing this
+        # failure would answer the question the identical replies exist to refuse.
+        return
 
 
 def request_password_reset(

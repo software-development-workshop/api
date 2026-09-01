@@ -28,9 +28,11 @@ docker compose up --build
 On a POSIX shell, use `export JWT_SECRET="$(openssl rand -base64 32)"` before the same
 Compose command. The value is local and must never be committed.
 
-The Accounts API docs are at <http://localhost:8000/docs>, Posts API docs are at
-<http://localhost:8001/docs>, and verification emails land in the Mailpit inbox at
-<http://localhost:8025> — nothing leaves the machine while developing.
+The Accounts API docs are at <http://localhost:8000/docs> and the Posts API docs are at
+<http://localhost:8001/docs>. Verification emails go out through Resend and arrive in a real
+inbox, so `RESEND_API_KEY` has to be exported the same way — ask the team for one, they are
+handed out per person through the password manager. Send to `delivered@resend.dev` to
+exercise the flow without filling your own inbox.
 
 ## Work on a service
 
@@ -46,10 +48,11 @@ The integration tests need the database. `compose.yaml` publishes it on **5433**
 not collide with a Postgres already running on the default port:
 
 ```bash
-JWT_SECRET=integration-test-jwt-secret-32-bytes-minimum docker compose up -d accounts-db
+RESEND_API_KEY=not-a-real-key \
+  JWT_SECRET=integration-test-jwt-secret-32-bytes-minimum docker compose up -d accounts-db
 cd services/accounts
 DB_HOST=localhost DB_PORT=5433 DB_NAME=accounts DB_USER=accounts DB_PASSWORD=accounts \
-  SMTP_HOST=localhost SMTP_PORT=1025 SMTP_FROM=no-reply@udesa-x.dev \
+  RESEND_API_KEY=not-a-real-key MAIL_FROM=no-reply@udesax.app \
   PUBLIC_BASE_URL=http://localhost:8000 \
   JWT_SECRET=integration-test-jwt-secret-32-bytes-minimum \
   uv run pytest tests/integration

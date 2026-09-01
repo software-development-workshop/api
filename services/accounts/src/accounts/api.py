@@ -1,7 +1,7 @@
 import uuid
 from typing import Annotated, Literal, Self
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Response, status
+from fastapi import APIRouter, Depends, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr, StringConstraints, field_validator, model_validator
 from sqlalchemy.orm import Session
@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from accounts import access_tokens
 from accounts.config import API_PREFIX, Settings, get_settings
 from accounts.db import get_session
-from accounts.email import SmtpMailer
+from accounts.email import ResendMailer
 from accounts.errors import InvalidAccessTokenError
 from accounts.models import Account
 from accounts.repository import AccountsRepository
@@ -36,7 +36,7 @@ def get_repository(session: SessionDep) -> AccountsRepository:
 
 
 def get_mailer() -> Mailer:
-    return SmtpMailer()
+    return ResendMailer()
 
 
 RepositoryDep = Annotated[AccountsRepository, Depends(get_repository)]
@@ -147,12 +147,9 @@ def resend(body: ResendRequest, repository: RepositoryDep, mailer: MailerDep) ->
 
 @router.post("/password-resets", status_code=status.HTTP_202_ACCEPTED)
 def request_reset(
-    body: PasswordResetRequest,
-    repository: RepositoryDep,
-    mailer: MailerDep,
-    background_tasks: BackgroundTasks,
+    body: PasswordResetRequest, repository: RepositoryDep, mailer: MailerDep
 ) -> Response:
-    background_tasks.add_task(request_password_reset, repository, mailer, body.identifier)
+    request_password_reset(repository, mailer, body.identifier)
     return Response(status_code=status.HTTP_202_ACCEPTED)
 
 
