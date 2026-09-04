@@ -3,11 +3,15 @@ from collections.abc import Iterator
 import pytest
 import resend
 import resend.exceptions
+from fastapi.testclient import TestClient
 
+from accounts.api import get_repository
 from accounts.config import get_settings
 from accounts.email import ResendMailer
 from accounts.errors import VerificationEmailNotSentError
 from accounts.main import app
+from accounts.models import Account
+from tests.unit.fakes import FakeAccountsRepository
 
 ENV = {
     "DB_HOST": "db",
@@ -118,3 +122,54 @@ def test_a_refused_send_is_reported_in_the_language_of_the_domain(
 
     with pytest.raises(VerificationEmailNotSentError):
         ResendMailer().send_verification("juan@udesa.edu.ar", "a-token")
+
+
+@pytest.fixture
+def null_provider_response(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    for key, value in ENV.items():
+        monkeypatch.setenv(key, value)
+    get_settings.cache_clear()
+    monkeypatch.setattr(resend, "api_key", None)
+
+    def respond(**_: object) -> tuple[bytes, int, dict[str, str]]:
+        return b"null", 200, {"content-type": "application/json"}
+
+    # Keep SDK decoding and exception handling real; replace only the network boundary.
+    monkeypatch.setattr(resend.default_http_client, "request", respond)
+    yield
+    get_settings.cache_clear()
+
+
+def test_registration_maps_null_provider_response_to_problem_details(
+    null_provider_response: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = FakeAccountsRepository()
+    monkeypatch.setitem(app.dependency_overrides, get_repository, lambda: repository)
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(
+            "/api/v1/registrations",
+            json={"email": "juan@udesa.edu.ar", "handle": "@juan", "password": "Passw0rd"},
+        )
+
+    assert response.status_code == 502
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.json()["type"].endswith("/verification-email-not-sent")
+    account = repository.find_by_email("juan@udesa.edu.ar")
+    assert account is not None
+    assert account.verified_at is None
+
+
+@pytest.mark.parametrize("email", ["juan@udesa.edu.ar", "unknown@udesa.edu.ar"])
+def test_resend_keeps_generic_response_when_provider_returns_null(
+    null_provider_response: None, monkeypatch: pytest.MonkeyPatch, email: str
+) -> None:
+    repository = FakeAccountsRepository()
+    repository.add(Account(email="juan@udesa.edu.ar", handle="juan"))
+    monkeypatch.setitem(app.dependency_overrides, get_repository, lambda: repository)
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post("/api/v1/verifications/resend", json={"email": email})
+
+    assert response.status_code == 202
+    assert response.content == b""

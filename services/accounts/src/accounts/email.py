@@ -29,8 +29,8 @@ class ResendMailer:
                 f"{get_settings().public_base_url}{API_PREFIX}/verifications/{token}\n\n"
                 "El link vence en 24 horas. Si no fuiste vos, ignorá este mensaje.",
             )
-        except resend.exceptions.ResendError as error:
-            # Every SDK failure arrives as this one type, connection and timeout included.
+        except (resend.exceptions.ResendError, resend.exceptions.NoContentError) as error:
+            # NoContentError is separate from the SDK's ResendError hierarchy.
             raise VerificationEmailNotSentError(
                 "Your account was created but we could not send the verification link. "
                 "Ask for a new one from the login screen."
