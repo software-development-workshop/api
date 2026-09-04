@@ -16,22 +16,34 @@ containerised and owns its own database; they share a repository, not a runtime.
 
 From a clean clone, with Docker running:
 
+Get your per-developer Resend key with sending access from the team's password manager.
+Replace the placeholder below in your shell, not in this file. Never commit the key.
+
 PowerShell:
 
 ```powershell
 $bytes = New-Object byte[] 32
 [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
 $env:JWT_SECRET = [Convert]::ToBase64String($bytes)
+$env:RESEND_API_KEY = "<your per-developer Resend key>"
 docker compose up --build
 ```
 
-On a POSIX shell, use `export JWT_SECRET="$(openssl rand -base64 32)"` before the same
-Compose command. The value is local and must never be committed.
+POSIX shell:
+
+```sh
+export JWT_SECRET="$(openssl rand -base64 32)"
+export RESEND_API_KEY="<your per-developer Resend key>"
+docker compose up --build
+```
+
+Both variables must be set before invoking Compose; it validates the whole configuration
+even when starting only one service. A service's `.env` file is not automatically loaded
+by Compose from the repository root.
 
 The Accounts API docs are at <http://localhost:8000/docs> and the Posts API docs are at
 <http://localhost:8001/docs>. Verification emails go out through Resend and arrive in a real
-inbox, so `RESEND_API_KEY` has to be exported the same way — ask the team for one, they are
-handed out per person through the password manager. Send to `delivered@resend.dev` to
+inbox. Send to `delivered@resend.dev` to
 exercise the flow without filling your own inbox.
 
 ## Work on a service
@@ -67,8 +79,15 @@ uv run uvicorn accounts.main:app --reload
 
 Posts is another self-contained `uv` project. Its integration database is published on 5434:
 
+For this database-only command, a fake key satisfies Compose interpolation without sending
+mail. The snippet preserves an already exported key; replace the fake value with your real
+key before running Accounts or the full stack.
+
 ```powershell
 $env:JWT_SECRET = "integration-test-jwt-secret-32-bytes-minimum"
+if (-not $env:RESEND_API_KEY) {
+    $env:RESEND_API_KEY = "not-a-real-key"
+}
 docker compose up -d posts-db
 Set-Location services/posts
 $env:DB_HOST = "127.0.0.1"
