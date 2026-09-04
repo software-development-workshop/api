@@ -12,11 +12,6 @@ services:
     ports:
       - "5433:5432"
 
-  mailpit:
-    image: axllent/mailpit:latest
-    ports:
-      - "8025:8025"   # web inbox, to read the verification email while developing
-
   accounts:
     build: ./services/accounts
     environment:
@@ -25,15 +20,53 @@ services:
       DB_NAME: accounts
       DB_USER: accounts
       DB_PASSWORD: accounts
-      SMTP_HOST: mailpit
-      SMTP_PORT: 1025
-      SMTP_FROM: no-reply@udesa-x.dev
+      RESEND_API_KEY: "${RESEND_API_KEY:?Set RESEND_API_KEY to a Resend key with sending access}"
+      MAIL_FROM: no-reply@udesax.app
       PUBLIC_BASE_URL: http://localhost:8000
       JWT_SECRET: "${JWT_SECRET:?Set JWT_SECRET to at least 32 random bytes}"
     ports:
       - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
     depends_on:
       accounts-db:
         condition: service_healthy
-      mailpit:
-        condition: service_started
+
+  posts-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: posts
+      POSTGRES_USER: posts
+      POSTGRES_PASSWORD: posts
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U posts"]
+      interval: 2s
+      retries: 15
+    ports:
+      - "127.0.0.1:5434:5432"
+
+  posts:
+    build: ./services/posts
+    environment:
+      DB_HOST: posts-db
+      DB_PORT: 5432
+      DB_NAME: posts
+      DB_USER: posts
+      DB_PASSWORD: posts
+      ACCOUNTS_BASE_URL: http://accounts:8000
+      ACCOUNTS_TIMEOUT_SECONDS: 2
+    ports:
+      - "127.0.0.1:8001:8001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+    depends_on:
+      posts-db:
+        condition: service_healthy
+      accounts:
+        condition: service_healthy

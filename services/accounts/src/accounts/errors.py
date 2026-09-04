@@ -103,3 +103,33 @@ class ExpiredVerificationTokenError(DomainError):
     status = 410
     slug = "expired-verification-token"
     title = "Verification token expired"
+
+
+class InvalidPasswordResetTokenError(DomainError):
+    status = 400
+    slug = "invalid-password-reset-token"
+    title = "Invalid password reset token"
+
+
+class ExpiredPasswordResetTokenError(DomainError):
+    status = 410
+    slug = "expired-password-reset-token"
+    title = "Password reset token expired"
+
+
+class PasswordUnchangedError(DomainError):
+    status = 400
+    slug = "password-unchanged"
+    title = "Password unchanged"
+
+
+class VerificationEmailNotSentError(DomainError):
+    """The account is registered and its link was issued; only the delivery failed.
+
+    502 rather than 503: the mail provider is what broke, and retrying the request that
+    raised this cannot help, because the address it carries is taken by then.
+    """
+
+    status = 502
+    slug = "verification-email-not-sent"
+    title = "Verification email not sent"

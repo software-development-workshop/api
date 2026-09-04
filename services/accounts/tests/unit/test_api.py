@@ -1,4 +1,5 @@
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import jwt
@@ -6,15 +7,24 @@ import pytest
 from fastapi.testclient import TestClient
 
 from accounts import tokens
+from accounts.access_tokens import issue
 from accounts.api import get_mailer, get_repository
 from accounts.config import get_settings
+from accounts.errors import VerificationEmailNotSentError
 from accounts.main import app
 from accounts.models import Account
-from tests.fakes import FakeMailer
+from tests.fakes import FailingPasswordResetMailer, FakeMailer
 from tests.unit.fakes import FakeAccountsRepository
 
 VALID = {"email": "juan@udesa.edu.ar", "handle": "@juan", "password": "Passw0rd"}
 JWT_SECRET = "unit-test-jwt-secret-longer-than-32-bytes"
+
+
+class RefusingMailer:
+    """Stands in for a mail provider that refuses the send."""
+
+    def send_verification(self, to: str, token: str) -> None:
+        raise VerificationEmailNotSentError("Ask for a new one from the login screen.")
 
 
 @pytest.fixture
@@ -147,6 +157,25 @@ def test_rejects_a_token_nobody_issued(client: TestClient) -> None:
     assert client.get(f"/api/v1/verifications/{tokens.generate()}").status_code == 400
 
 
+def test_a_send_failure_leaves_the_account_and_says_so(
+    client: TestClient, repository: FakeAccountsRepository
+) -> None:
+    """The account and its token are committed before the send, so the caller keeps both.
+
+    Letting the provider's own exception escape answers 500, which names no way out of a
+    state the resend endpoint already knows how to fix.
+    """
+
+    app.dependency_overrides[get_mailer] = RefusingMailer
+
+    response = client.post("/api/v1/registrations", json=VALID)
+
+    assert response.status_code == 502
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert response.json()["type"].endswith("/verification-email-not-sent")
+    assert repository.exists_with_email(VALID["email"])
+
+
 def test_resend_sends_a_fresh_link(client: TestClient, mailer: FakeMailer) -> None:
     client.post("/api/v1/registrations", json=VALID)
     first = mailer.last_token
@@ -171,6 +200,168 @@ def test_resend_answers_the_same_for_an_unknown_address(
     assert mailer.sent == []
 
 
+def test_password_reset_request_answers_the_same_for_known_and_unknown_identifiers(
+    client: TestClient,
+    mailer: FakeMailer,
+) -> None:
+    verify_registered_account(client, mailer)
+
+    known = client.post("/api/v1/password-resets", json={"identifier": "@juan"})
+    unknown = client.post("/api/v1/password-resets", json={"identifier": "nadie"})
+
+    assert known.status_code == unknown.status_code == 202
+    assert known.content == unknown.content == b""
+    assert len(mailer.password_resets) == 1
+
+
+def test_password_reset_request_stays_generic_when_email_delivery_fails(
+    client: TestClient,
+    mailer: FakeMailer,
+    repository: FakeAccountsRepository,
+) -> None:
+    verify_registered_account(client, mailer)
+    failing_mailer = FailingPasswordResetMailer()
+    app.dependency_overrides[get_mailer] = lambda: failing_mailer
+
+    response = client.post("/api/v1/password-resets", json={"identifier": "juan"})
+
+    assert response.status_code == 202
+    assert response.content == b""
+    assert repository.password_reset_tokens[-1].used_at is not None
+
+
+def test_password_reset_completion_returns_no_content(
+    client: TestClient,
+    mailer: FakeMailer,
+) -> None:
+    verify_registered_account(client, mailer)
+    client.post("/api/v1/password-resets", json={"identifier": "juan"})
+
+    response = client.post(
+        f"/api/v1/password-resets/{mailer.last_password_reset_token}",
+        json={
+            "new_password": "NewPassw0rd",
+            "password_confirmation": "NewPassw0rd",
+        },
+    )
+
+    assert response.status_code == 204
+    assert response.content == b""
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"new_password": "NewPassw0rd", "password_confirmation": "AnotherPassw0rd"},
+        {"new_password": "newpassword1", "password_confirmation": "newpassword1"},
+    ],
+)
+def test_password_reset_completion_validates_confirmation_and_password_policy(
+    client: TestClient,
+    mailer: FakeMailer,
+    body: dict[str, str],
+) -> None:
+    verify_registered_account(client, mailer)
+    client.post("/api/v1/password-resets", json={"identifier": "juan"})
+
+    response = client.post(
+        f"/api/v1/password-resets/{mailer.last_password_reset_token}",
+        json=body,
+    )
+
+    assert response.status_code == 422
+    assert response.headers["content-type"].startswith("application/problem+json")
+
+
+def test_password_reset_completion_rejects_an_unknown_token(client: TestClient) -> None:
+    response = client.post(
+        f"/api/v1/password-resets/{tokens.generate()}",
+        json={
+            "new_password": "NewPassw0rd",
+            "password_confirmation": "NewPassw0rd",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["type"].endswith("/invalid-password-reset-token")
+
+
+def test_password_reset_completion_rejects_a_used_token(
+    client: TestClient,
+    mailer: FakeMailer,
+) -> None:
+    verify_registered_account(client, mailer)
+    client.post("/api/v1/password-resets", json={"identifier": "juan"})
+    path = f"/api/v1/password-resets/{mailer.last_password_reset_token}"
+    first_body = {
+        "new_password": "NewPassw0rd",
+        "password_confirmation": "NewPassw0rd",
+    }
+    client.post(path, json=first_body)
+
+    response = client.post(
+        path,
+        json={
+            "new_password": "AnotherPassw0rd",
+            "password_confirmation": "AnotherPassw0rd",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["type"].endswith("/invalid-password-reset-token")
+
+
+def test_password_reset_completion_rejects_an_expired_token(
+    client: TestClient,
+    mailer: FakeMailer,
+    repository: FakeAccountsRepository,
+) -> None:
+    verify_registered_account(client, mailer)
+    client.post("/api/v1/password-resets", json={"identifier": "juan"})
+    repository.password_reset_tokens[0].expires_at = repository.password_reset_tokens[0].created_at
+
+    response = client.post(
+        f"/api/v1/password-resets/{mailer.last_password_reset_token}",
+        json={
+            "new_password": "NewPassw0rd",
+            "password_confirmation": "NewPassw0rd",
+        },
+    )
+
+    assert response.status_code == 410
+    assert response.json()["type"].endswith("/expired-password-reset-token")
+
+
+def test_password_reset_completion_rejects_the_current_password(
+    client: TestClient,
+    mailer: FakeMailer,
+) -> None:
+    verify_registered_account(client, mailer)
+    client.post("/api/v1/password-resets", json={"identifier": "juan"})
+
+    response = client.post(
+        f"/api/v1/password-resets/{mailer.last_password_reset_token}",
+        json={"new_password": "Passw0rd", "password_confirmation": "Passw0rd"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["type"].endswith("/password-unchanged")
+
+
+def test_resend_answers_the_same_when_the_send_fails(
+    client: TestClient, repository: FakeAccountsRepository
+) -> None:
+    """Only a registered address can reach a send, so its failure must not be visible here."""
+    client.post("/api/v1/registrations", json=VALID)
+    app.dependency_overrides[get_mailer] = RefusingMailer
+
+    known = client.post("/api/v1/verifications/resend", json={"email": VALID["email"]})
+    unknown = client.post("/api/v1/verifications/resend", json={"email": "nadie@udesa.edu.ar"})
+
+    assert known.status_code == unknown.status_code == 202
+    assert known.content == unknown.content
+
+
 def test_login_issues_a_one_hour_bearer_token(
     client: TestClient, mailer: FakeMailer, repository: FakeAccountsRepository
 ) -> None:
@@ -193,6 +384,142 @@ def test_login_issues_a_one_hour_bearer_token(
         issuer="udesa-x-accounts",
     )
     assert claims["sub"] == str(repository.accounts[0].id)
+
+
+def test_login_issues_the_accounts_current_session_version(
+    client: TestClient, mailer: FakeMailer, repository: FakeAccountsRepository
+) -> None:
+    verify_registered_account(client, mailer)
+    repository.accounts[0].session_version = 4
+
+    response = client.post(
+        "/api/v1/sessions",
+        json={"identifier": VALID["email"], "password": VALID["password"]},
+    )
+
+    claims = jwt.decode(
+        response.json()["access_token"],
+        JWT_SECRET,
+        algorithms=["HS256"],
+        audience="udesa-x",
+        issuer="udesa-x-accounts",
+    )
+    assert claims["session_version"] == 4
+
+
+def test_introspection_returns_the_active_account_id(
+    client: TestClient,
+    mailer: FakeMailer,
+    repository: FakeAccountsRepository,
+) -> None:
+    verify_registered_account(client, mailer)
+    login = client.post(
+        "/api/v1/sessions",
+        json={"identifier": VALID["email"], "password": VALID["password"]},
+    )
+
+    response = client.post(
+        "/api/v1/sessions/introspect",
+        headers={"Authorization": f"Bearer {login.json()['access_token']}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"account_id": str(repository.accounts[0].id)}
+
+
+@pytest.mark.parametrize("headers", [{}, {"Authorization": "Bearer malformed"}])
+def test_introspection_rejects_a_missing_or_malformed_bearer_token(
+    client: TestClient,
+    headers: dict[str, str],
+) -> None:
+    response = client.post("/api/v1/sessions/introspect", headers=headers)
+
+    assert response.status_code == 401
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert response.json()["type"].endswith("/invalid-access-token")
+
+
+def test_introspection_rejects_an_expired_access_token(
+    client: TestClient,
+    mailer: FakeMailer,
+    repository: FakeAccountsRepository,
+) -> None:
+    verify_registered_account(client, mailer)
+    expired = issue(
+        repository.accounts[0].id,
+        JWT_SECRET,
+        now=datetime.now(UTC) - timedelta(hours=2),
+    ).token
+
+    response = client.post(
+        "/api/v1/sessions/introspect",
+        headers={"Authorization": f"Bearer {expired}"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["type"].endswith("/invalid-access-token")
+
+
+def test_introspection_rejects_a_revoked_access_token(
+    client: TestClient,
+    mailer: FakeMailer,
+) -> None:
+    verify_registered_account(client, mailer)
+    login = client.post(
+        "/api/v1/sessions",
+        json={"identifier": VALID["email"], "password": VALID["password"]},
+    )
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    client.post("/api/v1/sessions/logout", headers=headers)
+
+    response = client.post("/api/v1/sessions/introspect", headers=headers)
+
+    assert response.status_code == 401
+    assert response.json()["type"].endswith("/invalid-access-token")
+
+
+def test_introspection_rejects_an_access_token_from_an_older_session_version(
+    client: TestClient,
+    mailer: FakeMailer,
+    repository: FakeAccountsRepository,
+) -> None:
+    verify_registered_account(client, mailer)
+    login = client.post(
+        "/api/v1/sessions",
+        json={"identifier": VALID["email"], "password": VALID["password"]},
+    )
+    repository.accounts[0].session_version += 1
+
+    response = client.post(
+        "/api/v1/sessions/introspect",
+        headers={"Authorization": f"Bearer {login.json()['access_token']}"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["type"].endswith("/invalid-access-token")
+
+
+@pytest.mark.parametrize("state", ["suspended", "deleted"])
+def test_introspection_rejects_an_access_token_for_an_unusable_account(
+    client: TestClient,
+    mailer: FakeMailer,
+    repository: FakeAccountsRepository,
+    state: str,
+) -> None:
+    verify_registered_account(client, mailer)
+    login = client.post(
+        "/api/v1/sessions",
+        json={"identifier": VALID["email"], "password": VALID["password"]},
+    )
+    setattr(repository.accounts[0], f"{state}_at", datetime.now(UTC))
+
+    response = client.post(
+        "/api/v1/sessions/introspect",
+        headers={"Authorization": f"Bearer {login.json()['access_token']}"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["type"].endswith("/invalid-access-token")
 
 
 def test_login_preserves_spaces_that_are_part_of_the_password(
