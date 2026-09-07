@@ -19,7 +19,12 @@ from accounts.config import API_PREFIX, Settings, get_settings
 from accounts.db import get_session
 from accounts.email import ResendMailer
 from accounts.errors import InvalidAccessTokenError
-from accounts.models import HANDLE_MAX_LENGTH, Account
+from accounts.models import (
+    BIO_MAX_STORAGE_LENGTH,
+    DISPLAY_NAME_MAX_STORAGE_LENGTH,
+    HANDLE_MAX_LENGTH,
+    Account,
+)
 from accounts.repository import AccountsRepository
 from accounts.service import (
     Mailer,
@@ -34,8 +39,6 @@ from accounts.service import (
     verify,
 )
 from accounts.validation import (
-    BIO_MAX_LENGTH,
-    DISPLAY_NAME_MAX_LENGTH,
     normalise_handle,
     validate_password,
 )
@@ -129,8 +132,10 @@ class ProfileUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     handle: str | None = Field(default=None, max_length=HANDLE_MAX_LENGTH + 1)
-    bio: str | None = Field(default=None, max_length=BIO_MAX_LENGTH)
-    display_name: str | None = Field(default=None, max_length=DISPLAY_NAME_MAX_LENGTH)
+    # Accept the escaped representation returned by the endpoint; the service enforces
+    # the logical 160/50-character limits after normalising it.
+    bio: str | None = Field(default=None, max_length=BIO_MAX_STORAGE_LENGTH)
+    display_name: str | None = Field(default=None, max_length=DISPLAY_NAME_MAX_STORAGE_LENGTH)
 
     @field_validator("handle")
     @classmethod

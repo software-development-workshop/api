@@ -7,6 +7,8 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 HANDLE_MAX_LENGTH = 15
 EMAIL_MAX_LENGTH = 254
+BIO_MAX_STORAGE_LENGTH = 640
+DISPLAY_NAME_MAX_STORAGE_LENGTH = 200
 ACCOUNT_HASH_CONSTRAINT = (
     "length(password_hash) = 97 AND "
     "password_hash ~ '^[$]argon2id[$]v=19[$]m=19456,t=2,p=1"
@@ -26,8 +28,8 @@ class Account(Base):
     handle: Mapped[str] = mapped_column(String(HANDLE_MAX_LENGTH))
     # The API limits logical text to 160/50 characters. Angle brackets are stored as
     # four-character entities after sanitisation, so the columns retain that headroom.
-    bio: Mapped[str | None] = mapped_column(String(640))
-    display_name: Mapped[str | None] = mapped_column(String(200))
+    bio: Mapped[str | None] = mapped_column(String(BIO_MAX_STORAGE_LENGTH))
+    display_name: Mapped[str | None] = mapped_column(String(DISPLAY_NAME_MAX_STORAGE_LENGTH))
     password_hash: Mapped[str] = mapped_column(String(255))
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

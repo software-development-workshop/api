@@ -217,6 +217,32 @@ def test_profile_update_counts_text_before_html_entity_encoding(
     assert repository.accounts[0].display_name == "x" * 48 + " &lt;"
 
 
+def test_profile_update_accepts_its_escaped_response_again(
+    client: TestClient, mailer: FakeMailer
+) -> None:
+    headers = authenticated_headers(client, mailer)
+    first = client.patch(
+        "/api/v1/accounts/me",
+        headers=headers,
+        json={"bio": "x" * 158 + " <", "display_name": "x" * 48 + " <"},
+    )
+    assert first.status_code == 200
+    returned_profile = {
+        "bio": first.json()["bio"],
+        "display_name": first.json()["display_name"],
+    }
+
+    second = client.patch(
+        "/api/v1/accounts/me",
+        headers=headers,
+        json=returned_profile,
+    )
+
+    assert second.status_code == 200
+    assert second.json()["bio"] == returned_profile["bio"]
+    assert second.json()["display_name"] == returned_profile["display_name"]
+
+
 def test_profile_update_can_clear_optional_text_fields(
     client: TestClient, mailer: FakeMailer
 ) -> None:

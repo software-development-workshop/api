@@ -41,7 +41,8 @@ def sanitise_profile_text(value: str | None, max_length: int) -> str | None:
     normalised = value.replace("\r\n", "\n").replace("\r", "\n").strip()
     if not normalised:
         return None
-    if len(normalised) > max_length:
+    logical_input = normalised.replace("&lt;", "<").replace("&gt;", ">")
+    if len(logical_input) > max_length:
         raise ValueError(f"must be at most {max_length} characters long")
 
     sanitised = nh3.clean(normalised, tags=set()).strip()
