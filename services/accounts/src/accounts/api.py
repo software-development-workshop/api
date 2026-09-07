@@ -1,12 +1,12 @@
 import uuid
 from typing import Annotated, Literal, Self
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr, StringConstraints, field_validator, model_validator
 from sqlalchemy.orm import Session
 
-from accounts import access_tokens
+from accounts import access_tokens, recovery
 from accounts.config import API_PREFIX, Settings, get_settings
 from accounts.db import get_session
 from accounts.email import ResendMailer
@@ -17,8 +17,6 @@ from accounts.service import (
     Mailer,
     authenticate,
     register,
-    request_password_reset,
-    resend_verification,
     reset_password,
     revoke_access_token,
     validate_access_token,
@@ -35,7 +33,7 @@ def get_repository(session: SessionDep) -> AccountsRepository:
     return AccountsRepository(session)
 
 
-def get_mailer() -> Mailer:
+async def get_mailer() -> Mailer:
     return ResendMailer()
 
 
@@ -140,16 +138,18 @@ def verify_account(token: str, repository: RepositoryDep) -> AccountResponse:
 
 
 @router.post("/verifications/resend", status_code=status.HTTP_202_ACCEPTED)
-def resend(body: ResendRequest, repository: RepositoryDep, mailer: MailerDep) -> Response:
-    resend_verification(repository, mailer, body.email)
+async def resend(
+    body: ResendRequest, background_tasks: BackgroundTasks, mailer: MailerDep
+) -> Response:
+    background_tasks.add_task(recovery.resend_verification, body.email, mailer)
     return Response(status_code=status.HTTP_202_ACCEPTED)
 
 
 @router.post("/password-resets", status_code=status.HTTP_202_ACCEPTED)
-def request_reset(
-    body: PasswordResetRequest, repository: RepositoryDep, mailer: MailerDep
+async def request_reset(
+    body: PasswordResetRequest, background_tasks: BackgroundTasks, mailer: MailerDep
 ) -> Response:
-    request_password_reset(repository, mailer, body.identifier)
+    background_tasks.add_task(recovery.request_password_reset, body.identifier, mailer)
     return Response(status_code=status.HTTP_202_ACCEPTED)
 
 

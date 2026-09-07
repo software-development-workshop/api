@@ -86,6 +86,13 @@ class FakeAccountsRepository:
         window: timedelta,
         limit: int,
     ) -> PasswordResetToken | None:
+        account = self.account_for_password_reset(token.account_id)
+        if (
+            account.verified_at is None
+            or account.suspended_at is not None
+            or account.deleted_at is not None
+        ):
+            return None
         issued_in_window = [
             existing
             for existing in self.password_reset_tokens
@@ -136,7 +143,11 @@ class FakeAccountsRepository:
 
     def issue_token(self, token: VerificationToken) -> VerificationToken | None:
         account = next(account for account in self.accounts if account.id == token.account_id)
-        if account.verified_at is not None:
+        if (
+            account.verified_at is not None
+            or account.suspended_at is not None
+            or account.deleted_at is not None
+        ):
             return None
         for live in self.tokens:
             if live.account_id == token.account_id and live.used_at is None:

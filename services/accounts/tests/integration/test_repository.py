@@ -278,6 +278,8 @@ def test_issuing_a_password_reset_stores_only_the_digest_and_replaces_the_live_l
 ) -> None:
     repository = AccountsRepository(session)
     stored = repository.add(account())
+    stored.verified_at = RESET_REQUESTED_AT
+    repository.save(stored)
     raw_token = "first-reset-token"
     first_digest = tokens.digest(raw_token)
     first = repository.issue_password_reset(
@@ -304,6 +306,8 @@ def test_password_reset_limit_allows_only_three_issues_inside_the_window(
 ) -> None:
     repository = AccountsRepository(session)
     stored = repository.add(account())
+    stored.verified_at = RESET_REQUESTED_AT
+    repository.save(stored)
 
     issued = [
         repository.issue_password_reset(
@@ -326,6 +330,7 @@ def test_consuming_a_password_reset_updates_the_account_and_uses_every_live_link
 ) -> None:
     repository = AccountsRepository(session)
     stored = repository.add(account())
+    stored.verified_at = RESET_REQUESTED_AT
     stored.failed_login_attempts = 5
     stored.locked_until = RESET_REQUESTED_AT + timedelta(minutes=15)
     stored.session_version = 2

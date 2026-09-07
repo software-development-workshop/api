@@ -91,6 +91,7 @@ def test_two_requests_carrying_the_same_password_reset_change_it_once(
             email="reset@udesa.edu.ar",
             handle="reset",
             password_hash=hash_password("Passw0rd"),
+            verified_at=datetime.now(UTC),
         )
     )
     requested_at = datetime.now(UTC)

@@ -185,6 +185,22 @@ def test_resend_stays_silent_for_an_address_nobody_registered(
     assert mailer.sent == []
 
 
+@pytest.mark.parametrize("state", ["suspended_at", "deleted_at"])
+def test_resend_does_not_issue_a_token_for_an_ineligible_unverified_account(
+    repository: FakeAccountsRepository, mailer: FakeMailer, state: str
+) -> None:
+    account = sign_up(repository, mailer)
+    setattr(account, state, datetime.now(UTC))
+    mailer.sent.clear()
+    original_tokens = list(repository.tokens)
+
+    resend_verification(repository, mailer, account.email)
+
+    assert mailer.sent == []
+    assert repository.tokens == original_tokens
+    assert original_tokens[0].used_at is None
+
+
 @pytest.mark.parametrize(
     "identifier",
     ["juan@udesa.edu.ar", "JUAN@UdeSA.edu.AR", "@juan", "@JUAN", "juan"],

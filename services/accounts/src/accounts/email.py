@@ -4,17 +4,17 @@ import resend.exceptions
 from accounts.config import API_PREFIX, get_settings
 from accounts.errors import VerificationEmailNotSentError
 
-# The provider is called inside the request that triggers it, so this is the ceiling on how
-# long that request can take. The SDK's own default is 30 seconds.
+# Bound each provider call, including registration's synchronous send.
+# The SDK's own default is 30 seconds.
 SEND_TIMEOUT_SECONDS = 10
 
 resend.default_http_client = resend.RequestsClient(timeout=SEND_TIMEOUT_SECONDS)
 
 
 class ResendMailer:
-    """Sends the service's mail inline, on the request that triggered it.
+    """Sends mail synchronously; the caller chooses when delivery runs.
 
-    There is no queue or outbox behind this. The resend button the product already requires
+    There is no durable queue or outbox. The resend button the product already requires
     is the recovery path for a failed send, so a second one would be built for the same job.
     """
 

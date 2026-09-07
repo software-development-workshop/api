@@ -157,7 +157,12 @@ def resend_verification(repository: AccountsRepository, mailer: Mailer, email: s
     this endpoint into a way to find out who has an account.
     """
     account = repository.find_by_email(email)
-    if account is None or account.verified_at is not None:
+    if (
+        account is None
+        or account.verified_at is not None
+        or account.suspended_at is not None
+        or account.deleted_at is not None
+    ):
         return
     try:
         _issue_verification(repository, mailer, account)
