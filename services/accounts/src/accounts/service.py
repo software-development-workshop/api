@@ -80,10 +80,10 @@ def delete_account(
 
     try:
         account = repository.account_for_deletion(claims.subject)
-        # Waiting for the row may outlive a JWT or a password change.
-        validate_access_token(repository, token, secret)
         if account is None:
             raise InvalidAccessTokenError("Invalid access token.")
+        # Decode again: waiting for the row may outlive a JWT or a password change.
+        validate_access_token(repository, token, secret)
         if account.verified_at is None:
             raise UnverifiedAccountError("Account not verified. Check your inbox.")
 

@@ -183,11 +183,8 @@ def test_deletion_lookup_locks_and_refreshes_only_the_requested_account() -> Non
     session = LookupSession(account)
     found = AccountsRepository(session).account_for_deletion(account_id)
     assert found is account
-    statement = session.statements[0]
-    assert account_id in statement.compile().params.values()
-    assert "accounts.id =" in str(statement)
-    assert "FOR UPDATE" in str(statement)
-    assert statement.get_execution_options()["populate_existing"] is True
+    assert session.get_calls == [(Account, account_id)]
+    assert session.get_options == {"with_for_update": True, "populate_existing": True}
 
 
 def test_confirmed_deletion_spends_only_unused_links_for_its_account() -> None:
