@@ -134,13 +134,27 @@ class FakeAccountsRepository:
     def find_token(self, token_digest: str) -> VerificationToken | None:
         return next((t for t in self.tokens if t.token_digest == token_digest), None)
 
-    def issue_token(self, token: VerificationToken) -> VerificationToken | None:
+    def issue_token(
+        self,
+        token: VerificationToken,
+        *,
+        window: timedelta,
+        limit: int,
+    ) -> VerificationToken | None:
         account = next(account for account in self.accounts if account.id == token.account_id)
         if account.verified_at is not None:
             return None
+        issued_in_window = [
+            existing
+            for existing in self.tokens
+            if existing.account_id == token.account_id
+            and existing.created_at >= token.created_at - window
+        ]
+        if len(issued_in_window) >= limit:
+            return None
         for live in self.tokens:
             if live.account_id == token.account_id and live.used_at is None:
-                live.used_at = datetime.now(UTC)
+                live.used_at = token.created_at
         token.id = token.id or uuid.uuid4()
         self.tokens.append(token)
         return token

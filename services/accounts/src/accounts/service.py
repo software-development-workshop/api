@@ -28,6 +28,8 @@ LOGIN_LOCK_TTL = timedelta(minutes=15)
 PASSWORD_RESET_TTL = timedelta(minutes=10)
 PASSWORD_RESET_WINDOW = timedelta(minutes=15)
 PASSWORD_RESET_LIMIT = 3
+VERIFICATION_WINDOW = timedelta(minutes=15)
+VERIFICATION_LIMIT = 3
 
 logger = logging.getLogger(__name__)
 
@@ -234,13 +236,17 @@ def reset_password(
 
 
 def _issue_verification(repository: AccountsRepository, mailer: Mailer, account: Account) -> None:
+    issued_at = datetime.now(UTC)
     token = tokens.generate()
     issued = repository.issue_token(
         VerificationToken(
             account_id=account.id,
             token_digest=tokens.digest(token),
-            expires_at=datetime.now(UTC) + VERIFICATION_TTL,
-        )
+            expires_at=issued_at + VERIFICATION_TTL,
+            created_at=issued_at,
+        ),
+        window=VERIFICATION_WINDOW,
+        limit=VERIFICATION_LIMIT,
     )
     if issued is None:
         return

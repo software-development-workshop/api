@@ -207,7 +207,13 @@ class AccountsRepository:
         statement = select(VerificationToken).where(VerificationToken.token_digest == token_digest)
         return self._session.execute(statement).scalar_one_or_none()
 
-    def issue_token(self, token: VerificationToken) -> VerificationToken | None:
+    def issue_token(
+        self,
+        token: VerificationToken,
+        *,
+        window: timedelta,
+        limit: int,
+    ) -> VerificationToken | None:
         """Replace every live token of an account with this one, in a single transaction.
 
         The account row is locked first. Without it two concurrent resends each invalidate
@@ -223,6 +229,16 @@ class AccountsRepository:
         if account.verified_at is not None:
             self._session.rollback()
             return None
+
+        issued_in_window = self._session.execute(
+            select(func.count(VerificationToken.id))
+            .where(VerificationToken.account_id == token.account_id)
+            .where(VerificationToken.created_at >= token.created_at - window)
+        ).scalar_one()
+        if issued_in_window >= limit:
+            self._session.rollback()
+            return None
+
         self._session.execute(
             update(VerificationToken)
             .where(VerificationToken.account_id == token.account_id)

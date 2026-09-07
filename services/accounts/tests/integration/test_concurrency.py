@@ -149,6 +149,41 @@ def test_four_simultaneous_password_reset_requests_respect_the_account_limit(
     assert sum(len(reset_mailer.password_resets) for reset_mailer in mailers) == 3
 
 
+def test_four_simultaneous_verification_resends_respect_the_account_limit(
+    session: Session,
+) -> None:
+    # Created directly, not via sign_up/register: registering already issues one
+    # verification token, which would consume one of the window's three slots before the
+    # concurrent resends even start.
+    repository = AccountsRepository(session)
+    stored = repository.add(
+        Account(
+            email="juan@udesa.edu.ar",
+            handle="juan",
+            password_hash=hash_password("Passw0rd"),
+        )
+    )
+    mailers = [FakeMailer() for _ in range(4)]
+
+    in_parallel(
+        lambda concurrent_repository, index: resend_verification(
+            concurrent_repository, mailers[index], stored.email
+        ),
+        workers=4,
+    )
+
+    session.expire_all()
+    stored_tokens = (
+        session.execute(select(VerificationToken).where(VerificationToken.account_id == stored.id))
+        .scalars()
+        .all()
+    )
+    live = [token for token in stored_tokens if token.used_at is None]
+    assert len(stored_tokens) == 3
+    assert len(live) == 1
+    assert sum(len(resend_mailer.sent) for resend_mailer in mailers) == 3
+
+
 def test_two_simultaneous_resends_leave_exactly_one_usable_link(
     session: Session, mailer: FakeMailer
 ) -> None:
