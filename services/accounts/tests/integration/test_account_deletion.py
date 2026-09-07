@@ -236,7 +236,9 @@ def test_deleted_account_cannot_issue_a_new_link_under_repository_lock(
                 account_id=account.id,
                 token_digest="a" * 64,
                 expires_at=now + timedelta(hours=1),
-            )
+            ),
+            window=service.VERIFICATION_WINDOW,
+            limit=service.VERIFICATION_LIMIT,
         )
         model = VerificationToken
     else:

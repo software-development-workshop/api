@@ -20,17 +20,24 @@ NONCANONICAL_STRONGER_HASH = PasswordHasher(
     parallelism=2,
 ).hash("Passw0rd")
 RESET_REQUESTED_AT = datetime(2030, 1, 2, 3, 4, 5, tzinfo=UTC)
+VERIFICATION_REQUESTED_AT = datetime(2030, 1, 2, 3, 4, 5, tzinfo=UTC)
 
 
 def account(email: str = "juan@udesa.edu.ar", handle: str = "juan") -> Account:
     return Account(email=email, handle=handle, password_hash=VALID_PASSWORD_HASH)
 
 
-def token(account_id: uuid.UUID, digest: str = "a" * 64, hours: int = 24) -> VerificationToken:
+def token(
+    account_id: uuid.UUID,
+    digest: str = "a" * 64,
+    hours: int = 24,
+    created_at: datetime = VERIFICATION_REQUESTED_AT,
+) -> VerificationToken:
     return VerificationToken(
         account_id=account_id,
         token_digest=digest,
-        expires_at=datetime.now(UTC) + timedelta(hours=hours),
+        expires_at=created_at + timedelta(hours=hours),
+        created_at=created_at,
     )
 
 
@@ -107,7 +114,7 @@ def test_stores_a_token_and_finds_it_by_its_digest(session: Session) -> None:
     repository = AccountsRepository(session)
     stored = repository.add(account())
 
-    saved = repository.issue_token(token(stored.id))
+    saved = repository.issue_token(token(stored.id), window=timedelta(minutes=15), limit=3)
 
     assert repository.find_token("a" * 64).id == saved.id
 
@@ -243,10 +250,10 @@ def test_rejects_an_unsupported_password_hash(session: Session, password_hash: s
 def test_issuing_burns_every_live_token_of_the_account(session: Session) -> None:
     repository = AccountsRepository(session)
     stored = repository.add(account())
-    repository.issue_token(token(stored.id, digest="c" * 64))
-    repository.issue_token(token(stored.id, digest="d" * 64))
+    repository.issue_token(token(stored.id, digest="c" * 64), window=timedelta(minutes=15), limit=3)
+    repository.issue_token(token(stored.id, digest="d" * 64), window=timedelta(minutes=15), limit=3)
 
-    repository.issue_token(token(stored.id, digest="e" * 64))
+    repository.issue_token(token(stored.id, digest="e" * 64), window=timedelta(minutes=15), limit=3)
 
     assert repository.find_token("c" * 64).used_at is not None
     assert repository.find_token("d" * 64).used_at is not None
@@ -256,7 +263,7 @@ def test_issuing_burns_every_live_token_of_the_account(session: Session) -> None
 def test_consuming_stamps_the_token_and_the_account(session: Session) -> None:
     repository = AccountsRepository(session)
     stored = repository.add(account())
-    saved = repository.issue_token(token(stored.id))
+    saved = repository.issue_token(token(stored.id), window=timedelta(minutes=15), limit=3)
 
     verified = repository.consume_token(saved)
 
@@ -267,7 +274,7 @@ def test_consuming_stamps_the_token_and_the_account(session: Session) -> None:
 def test_consuming_a_spent_token_answers_nothing(session: Session) -> None:
     repository = AccountsRepository(session)
     stored = repository.add(account())
-    saved = repository.issue_token(token(stored.id))
+    saved = repository.issue_token(token(stored.id), window=timedelta(minutes=15), limit=3)
     repository.consume_token(saved)
 
     assert repository.consume_token(saved) is None
@@ -316,6 +323,28 @@ def test_password_reset_limit_allows_only_three_issues_inside_the_window(
 
     rows = session.execute(
         select(PasswordResetToken).where(PasswordResetToken.account_id == stored.id)
+    ).scalars()
+    assert [record is not None for record in issued] == [True, True, True, False]
+    assert len(list(rows)) == 3
+
+
+def test_verification_limit_allows_only_three_issues_inside_the_window(
+    session: Session,
+) -> None:
+    repository = AccountsRepository(session)
+    stored = repository.add(account())
+
+    issued = [
+        repository.issue_token(
+            token(stored.id, digest=str(index) * 64),
+            window=timedelta(minutes=15),
+            limit=3,
+        )
+        for index in range(1, 5)
+    ]
+
+    rows = session.execute(
+        select(VerificationToken).where(VerificationToken.account_id == stored.id)
     ).scalars()
     assert [record is not None for record in issued] == [True, True, True, False]
     assert len(list(rows)) == 3

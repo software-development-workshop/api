@@ -296,7 +296,9 @@ def test_verification_issuer_waiting_on_deleted_row_creates_no_link(
                 account_id=account.id,
                 token_digest="e" * 64,
                 expires_at=now + timedelta(hours=1),
-            )
+            ),
+            window=service.VERIFICATION_WINDOW,
+            limit=service.VERIFICATION_LIMIT,
         ),
     ) as (blocker, results):
         # Repository guard also protects legacy/imported deleted, unverified rows.
