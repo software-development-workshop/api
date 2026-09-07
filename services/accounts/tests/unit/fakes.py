@@ -58,6 +58,24 @@ class FakeAccountsRepository:
         self.completed_login_attempts += 1
         return account
 
+    def account_for_deletion(self, account_id: uuid.UUID) -> Account | None:
+        return next((account for account in self.accounts if account.id == account_id), None)
+
+    def finish_deletion_attempt(
+        self, account: Account, *, deleted_at: datetime | None = None
+    ) -> None:
+        if deleted_at is not None:
+            account.deleted_at = deleted_at
+            account.session_version += 1
+            account.failed_login_attempts = 0
+            account.locked_until = None
+            for token in [*self.tokens, *self.password_reset_tokens]:
+                if token.account_id == account.id and token.used_at is None:
+                    token.used_at = deleted_at
+
+    def rollback(self) -> None:
+        pass
+
     def revoke_access_token(self, jti: uuid.UUID, expires_at: datetime) -> None:
         self.revoked_access_tokens.setdefault(jti, expires_at)
 
@@ -77,7 +95,14 @@ class FakeAccountsRepository:
         )
 
     def account_for_password_reset(self, account_id: uuid.UUID) -> Account | None:
-        return next((account for account in self.accounts if account.id == account_id), None)
+        return next(
+            (
+                account
+                for account in self.accounts
+                if account.id == account_id and account.deleted_at is None
+            ),
+            None,
+        )
 
     def issue_password_reset(
         self,
@@ -86,6 +111,8 @@ class FakeAccountsRepository:
         window: timedelta,
         limit: int,
     ) -> PasswordResetToken | None:
+        if self.account_for_password_reset(token.account_id) is None:
+            return None
         issued_in_window = [
             existing
             for existing in self.password_reset_tokens
@@ -121,7 +148,7 @@ class FakeAccountsRepository:
             return None
         account = self.account_for_password_reset(token.account_id)
         if account is None:
-            raise LookupError("password reset token points at a missing account")
+            return None
         for live in self.password_reset_tokens:
             if live.account_id == token.account_id and live.used_at is None:
                 live.used_at = changed_at
@@ -136,7 +163,7 @@ class FakeAccountsRepository:
 
     def issue_token(self, token: VerificationToken) -> VerificationToken | None:
         account = next(account for account in self.accounts if account.id == token.account_id)
-        if account.verified_at is not None:
+        if account.verified_at is not None or account.deleted_at is not None:
             return None
         for live in self.tokens:
             if live.account_id == token.account_id and live.used_at is None:
@@ -148,8 +175,10 @@ class FakeAccountsRepository:
     def consume_token(self, token: VerificationToken) -> Account | None:
         if token.used_at is not None:
             return None
+        account = next(a for a in self.accounts if a.id == token.account_id)
+        if account.verified_at is not None or account.deleted_at is not None:
+            return None
         now = datetime.now(UTC)
         token.used_at = now
-        account = next(a for a in self.accounts if a.id == token.account_id)
         account.verified_at = now
         return account

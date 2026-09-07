@@ -62,6 +62,47 @@ def validate_access_token(
     return claims
 
 
+def delete_account(
+    repository: AccountsRepository,
+    token: str | None,
+    password: str,
+    secret: str,
+    now: datetime | None = None,
+) -> None:
+    if token is None:
+        raise InvalidAccessTokenError("Invalid access token.")
+    try:
+        claims = access_tokens.decode(token, secret)
+    except access_tokens.InvalidAccessTokenError as error:
+        raise InvalidAccessTokenError("Invalid access token.") from error
+
+    try:
+        account = repository.account_for_deletion(claims.subject)
+        # Waiting for the row may outlive a JWT or a password change.
+        validate_access_token(repository, token, secret)
+        if account is None:
+            raise InvalidAccessTokenError("Invalid access token.")
+        if account.verified_at is None:
+            raise UnverifiedAccountError("Account not verified. Check your inbox.")
+
+        attempted_at = now or datetime.now(UTC)
+        if account.locked_until is not None and account.locked_until > attempted_at:
+            raise AccountTemporarilyLockedError("Account temporarily locked. Try again later.")
+        if account.locked_until is not None:
+            account.failed_login_attempts = 0
+            account.locked_until = None
+        if not verify_password(account.password_hash, password):
+            account.failed_login_attempts += 1
+            if account.failed_login_attempts >= MAX_FAILED_LOGIN_ATTEMPTS:
+                account.locked_until = attempted_at + LOGIN_LOCK_TTL
+            repository.finish_deletion_attempt(account)
+            raise InvalidCredentialsError("Invalid credentials.")
+
+        repository.finish_deletion_attempt(account, deleted_at=attempted_at)
+    finally:
+        repository.rollback()
+
+
 def authenticate(
     repository: AccountsRepository,
     identifier: str,
@@ -217,20 +258,23 @@ def reset_password(
             "That password reset link expired. Ask for a new one from the login screen."
         )
 
-    account = repository.account_for_password_reset(record.account_id)
-    if account is None:  # pragma: no cover - the foreign key makes this unreachable
-        raise InvalidPasswordResetTokenError("That password reset link is not valid.")
-    if verify_password(account.password_hash, new_password):
-        raise PasswordUnchangedError("The new password must differ from the current password.")
+    try:
+        account = repository.account_for_password_reset(record.account_id)
+        if account is None:
+            raise InvalidPasswordResetTokenError("That password reset link is not valid.")
+        if verify_password(account.password_hash, new_password):
+            raise PasswordUnchangedError("The new password must differ from the current password.")
 
-    changed = repository.consume_password_reset(
-        record,
-        hash_password(new_password),
-        changed_at=changed_at,
-    )
-    if changed is None:
-        raise InvalidPasswordResetTokenError("That password reset link is not valid.")
-    return changed
+        changed = repository.consume_password_reset(
+            record,
+            hash_password(new_password),
+            changed_at=changed_at,
+        )
+        if changed is None:
+            raise InvalidPasswordResetTokenError("That password reset link is not valid.")
+        return changed
+    finally:
+        repository.rollback()
 
 
 def _issue_verification(repository: AccountsRepository, mailer: Mailer, account: Account) -> None:
