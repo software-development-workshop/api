@@ -24,11 +24,7 @@ class AccountsRepository:
             self._session.commit()
         except IntegrityError as error:
             self._session.rollback()
-            constraint_name = getattr(getattr(error.orig, "diag", None), "constraint_name", None)
-            if constraint_name == _EMAIL_UNIQUE_INDEX:
-                raise EmailAlreadyRegisteredError("That email is already registered.") from error
-            if constraint_name == _HANDLE_UNIQUE_INDEX:
-                raise HandleTakenError("That handle is already taken.") from error
+            self._raise_identity_conflict(error)
             raise
         self._session.refresh(account)
         return account
@@ -77,9 +73,35 @@ class AccountsRepository:
         return self._session.execute(statement).scalar_one_or_none()
 
     def save(self, account: Account) -> Account:
-        self._session.commit()
+        try:
+            self._session.commit()
+        except IntegrityError as error:
+            self._session.rollback()
+            self._raise_identity_conflict(error)
+            raise
         self._session.refresh(account)
         return account
+
+    def account_for_profile_update(self, account_id: uuid.UUID) -> Account | None:
+        statement = (
+            select(Account)
+            .where(
+                Account.id == account_id,
+                Account.suspended_at.is_(None),
+                Account.deleted_at.is_(None),
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return self._session.execute(statement).scalar_one_or_none()
+
+    @staticmethod
+    def _raise_identity_conflict(error: IntegrityError) -> None:
+        constraint_name = getattr(getattr(error.orig, "diag", None), "constraint_name", None)
+        if constraint_name == _EMAIL_UNIQUE_INDEX:
+            raise EmailAlreadyRegisteredError("That email is already registered.") from error
+        if constraint_name == _HANDLE_UNIQUE_INDEX:
+            raise HandleTakenError("That handle is already taken.") from error
 
     def finish_login_attempt(self, account: Account | None) -> Account | None:
         self._session.commit()

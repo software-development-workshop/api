@@ -189,6 +189,42 @@ def test_persists_the_account_session_version(session: Session) -> None:
     assert reloaded.session_version == 4
 
 
+def test_persists_profile_fields_and_locks_only_active_accounts(session: Session) -> None:
+    repository = AccountsRepository(session)
+    stored = repository.add(account())
+
+    editable = repository.account_for_profile_update(stored.id)
+    editable.bio = "Bio"
+    editable.display_name = "Juan"
+    editable.handle = "nuevo"
+    repository.save(editable)
+
+    session.expire_all()
+    reloaded = session.get(Account, stored.id)
+    assert reloaded.bio == "Bio"
+    assert reloaded.display_name == "Juan"
+    assert reloaded.handle == "nuevo"
+
+    reloaded.suspended_at = datetime.now(UTC)
+    repository.save(reloaded)
+    assert repository.account_for_profile_update(stored.id) is None
+
+
+def test_duplicate_handle_on_profile_update_is_mapped_and_session_is_reusable(
+    session: Session,
+) -> None:
+    repository = AccountsRepository(session)
+    repository.add(account(handle="primero"))
+    second = repository.add(account(email="otro@udesa.edu.ar", handle="segundo"))
+    second.handle = "PRIMERO"
+
+    with pytest.raises(HandleTakenError):
+        repository.save(second)
+
+    second.handle = "segundo"
+    assert repository.save(second).handle == "segundo"
+
+
 def test_only_exposes_the_session_version_for_an_active_account(session: Session) -> None:
     repository = AccountsRepository(session)
     stored = repository.add(account())

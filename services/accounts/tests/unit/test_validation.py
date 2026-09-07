@@ -1,6 +1,12 @@
 import pytest
 
-from accounts.validation import normalise_handle, validate_password
+from accounts.validation import (
+    BIO_MAX_LENGTH,
+    DISPLAY_NAME_MAX_LENGTH,
+    normalise_handle,
+    sanitise_profile_text,
+    validate_password,
+)
 
 
 @pytest.mark.parametrize("value", ["@juan", "@a_b_1", "@" + "x" * 15])
@@ -28,6 +34,27 @@ def test_rejects_a_malformed_handle(value: str) -> None:
 
 def test_strips_the_at_sign_because_it_is_presentation() -> None:
     assert normalise_handle("@juan") == "juan"
+
+
+def test_sanitises_profile_text_and_removes_markup() -> None:
+    assert sanitise_profile_text(" <b>Hello</b><script>alert(1)</script> ", 160) == "Hello"
+
+
+@pytest.mark.parametrize("value", [None, "", "  \r\n  ", "<script></script>"])
+def test_empty_profile_text_is_stored_as_null(value: str | None) -> None:
+    assert sanitise_profile_text(value, BIO_MAX_LENGTH) is None
+
+
+@pytest.mark.parametrize(
+    ("value", "max_length"),
+    [
+        ("x" * (BIO_MAX_LENGTH + 1), BIO_MAX_LENGTH),
+        ("x" * (DISPLAY_NAME_MAX_LENGTH + 1), DISPLAY_NAME_MAX_LENGTH),
+    ],
+)
+def test_rejects_profile_text_over_its_limit(value: str, max_length: int) -> None:
+    with pytest.raises(ValueError, match="at most"):
+        sanitise_profile_text(value, max_length)
 
 
 @pytest.mark.parametrize("value", ["Passw0rd", "A1" + "x" * 126])
