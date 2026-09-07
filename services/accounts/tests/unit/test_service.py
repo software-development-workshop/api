@@ -243,6 +243,21 @@ def test_email_and_handle_requests_share_the_three_per_fifteen_minute_limit(
     assert len(live) == 1
 
 
+def test_resend_shares_the_three_per_fifteen_minute_limit_with_registration(
+    repository: FakeAccountsRepository,
+    mailer: FakeMailer,
+) -> None:
+    sign_up(repository, mailer)  # already used 1 of the window's 3 slots
+
+    for _ in range(4):
+        resend_verification(repository, mailer, "juan@udesa.edu.ar")
+
+    live = [token for token in repository.tokens if token.used_at is None]
+    assert len(mailer.sent) == 3
+    assert len(repository.tokens) == 3
+    assert len(live) == 1
+
+
 @pytest.mark.parametrize("state", ["unknown", "unverified", "suspended", "deleted"])
 def test_password_reset_request_stays_silent_for_an_ineligible_account(
     repository: FakeAccountsRepository,
@@ -370,7 +385,7 @@ def test_resend_does_not_send_when_no_replacement_token_was_issued(
 ) -> None:
     sign_up(repository, mailer)
     sent_so_far = len(mailer.sent)
-    repository.issue_token = lambda _: None  # type: ignore[method-assign]
+    repository.issue_token = lambda *args, **kwargs: None  # type: ignore[method-assign]
 
     resend_verification(repository, mailer, "juan@udesa.edu.ar")
 
