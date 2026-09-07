@@ -268,3 +268,27 @@ anterior permanece en la base de Posts; su ocultamiento pertenece a AC.4.
 Bruno aprobó el diseño y el usuario autorizó implementación, commit y push en un worktree y
 rama nuevos. No se abre una PR ni se cierra #20. D-RET-01 y los criterios excluidos siguen
 pendientes. La futura PR debe referenciar `Part of #20`.
+
+## Seguimiento de la review de PR #42
+
+Se integró `develop` en `06dbd32` y se adaptaron las dos llamadas de integración a
+`issue_token` con `VERIFICATION_WINDOW` y `VERIFICATION_LIMIT`. Antes del ajuste fallaban
+ambas; después pasaron los 37 casos de baja y concurrencia.
+
+La adquisición y el refresco de la fila se centralizaron en `_lock_account`. La baja
+rechaza una cuenta inexistente antes de revalidar el JWT, conservando la comprobación de
+vencimiento después de esperar el bloqueo. El consumo de reset conserva su bloqueo propio
+para mantener seguras las llamadas directas al repositorio; dentro de la misma transacción
+la segunda consulta no introduce una segunda espera por la fila.
+
+Se reprodujo y corrigió la carrera de suspensión en emisión, consulta y consumo de resets.
+Cinco regresiones cubren una suspensión mientras se espera la fila con estado ORM precargado,
+y el rechazo HTTP tanto de la contraseña actual como de una nueva, sin mutaciones ni consumo
+del enlace. La recuperación de una cuenta suspendida devuelve el error de enlace inválido.
+
+Validación posterior a la review: Accounts, 212 unitarios (85,66%) y 132 de integración;
+Posts, 37 unitarios (96,73%) y 14 de integración. Formato y lint aprobados en ambos servicios.
+Se repitió el flujo HTTP real con Uvicorn y PostgreSQL 17: dos sesiones, publicación, baja
+incorrecta/correcta, rechazo de ambos JWT y de enlaces anteriores, identidad y post retenidos.
+También se verificó por HTTP que un reset de cuenta suspendida rechaza ambas contraseñas sin
+modificar hash/versión ni gastar su enlace. Se usaron bases desechables, sin enviar correos.

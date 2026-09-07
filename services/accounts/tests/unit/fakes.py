@@ -99,7 +99,9 @@ class FakeAccountsRepository:
             (
                 account
                 for account in self.accounts
-                if account.id == account_id and account.deleted_at is None
+                if account.id == account_id
+                and account.deleted_at is None
+                and account.suspended_at is None
             ),
             None,
         )

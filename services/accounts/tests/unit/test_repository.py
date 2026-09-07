@@ -169,8 +169,9 @@ def test_password_reset_account_lookup_uses_the_account_id() -> None:
     assert session.get_options == {"with_for_update": True, "populate_existing": True}
 
 
-def test_deleted_password_reset_lookup_rolls_back_without_returning_identity() -> None:
-    account = Account(id=uuid.uuid4(), deleted_at=datetime.now(UTC))
+@pytest.mark.parametrize("state", ["deleted_at", "suspended_at"])
+def test_inactive_password_reset_lookup_rolls_back_without_returning_identity(state: str) -> None:
+    account = Account(id=uuid.uuid4(), **{state: datetime.now(UTC)})
     session = LookupSession(account)
     found = AccountsRepository(session).account_for_password_reset(account.id)
     assert found is None

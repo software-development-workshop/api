@@ -139,7 +139,9 @@ class AccountsRepository:
 
     def account_for_password_reset(self, account_id: uuid.UUID) -> Account | None:
         account = self._lock_account(account_id)
-        if account is not None and account.deleted_at is not None:
+        if account is not None and (
+            account.deleted_at is not None or account.suspended_at is not None
+        ):
             self._session.rollback()
             return None
         return account
@@ -155,7 +157,7 @@ class AccountsRepository:
         if account is None:  # pragma: no cover - the foreign key makes this unreachable
             raise LookupError("password reset token points at a missing account")
 
-        if account.deleted_at is not None:
+        if account.deleted_at is not None or account.suspended_at is not None:
             self._session.rollback()
             return None
 
@@ -204,7 +206,7 @@ class AccountsRepository:
         if account is None:  # pragma: no cover - the foreign key makes this unreachable
             raise LookupError("password reset token points at a missing account")
 
-        if account.deleted_at is not None:
+        if account.deleted_at is not None or account.suspended_at is not None:
             self._session.rollback()
             return None
 
