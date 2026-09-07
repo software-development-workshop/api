@@ -1,4 +1,5 @@
 import re
+from html import unescape
 
 import nh3
 
@@ -27,10 +28,12 @@ def normalise_handle(value: str) -> str:
 
 
 def sanitise_profile_text(value: str | None, max_length: int) -> str | None:
-    """Strip markup from optional profile text and enforce its final size.
+    """Strip markup from optional profile text and enforce its logical size.
 
     Empty values intentionally become NULL so clearing a profile field has the same
-    representation whether the client sends whitespace or an empty string.
+    representation whether the client sends whitespace or an empty string. ``nh3``
+    serialises text as HTML, so decode its entities once before measuring and storing
+    the result; angle brackets are escaped again to keep the stored value safe.
     """
     if value is None:
         return None
@@ -44,9 +47,13 @@ def sanitise_profile_text(value: str | None, max_length: int) -> str | None:
     sanitised = nh3.clean(normalised, tags=set()).strip()
     if not sanitised:
         return None
-    if len(sanitised) > max_length:
+
+    logical_text = unescape(sanitised).strip()
+    if not logical_text:
+        return None
+    if len(logical_text) > max_length:
         raise ValueError(f"must be at most {max_length} characters after sanitisation")
-    return sanitised
+    return logical_text.replace("<", "&lt;").replace(">", "&gt;")
 
 
 def validate_password(value: str) -> str:

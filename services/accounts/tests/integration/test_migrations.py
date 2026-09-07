@@ -35,8 +35,8 @@ def test_profile_columns_are_nullable_and_have_the_declared_limits() -> None:
         }
 
     assert columns == {
-        "bio": (160, "YES"),
-        "display_name": (50, "YES"),
+        "bio": (640, "YES"),
+        "display_name": (200, "YES"),
     }
 
 

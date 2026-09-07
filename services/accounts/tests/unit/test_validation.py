@@ -40,6 +40,28 @@ def test_sanitises_profile_text_and_removes_markup() -> None:
     assert sanitise_profile_text(" <b>Hello</b><script>alert(1)</script> ", 160) == "Hello"
 
 
+def test_keeps_encoded_markup_escaped_after_normalising_entities() -> None:
+    assert (
+        sanitise_profile_text("&lt;script&gt;alert(1)&lt;/script&gt;", 160)
+        == "&lt;script&gt;alert(1)&lt;/script&gt;"
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "max_length", "expected"),
+    [
+        ("x" * 158 + " &", BIO_MAX_LENGTH, "x" * 158 + " &"),
+        ("x" * 158 + " <", BIO_MAX_LENGTH, "x" * 158 + " &lt;"),
+        ("x" * 48 + " &", DISPLAY_NAME_MAX_LENGTH, "x" * 48 + " &"),
+        ("x" * 48 + " <", DISPLAY_NAME_MAX_LENGTH, "x" * 48 + " &lt;"),
+    ],
+)
+def test_counts_profile_text_before_html_entity_encoding(
+    value: str, max_length: int, expected: str
+) -> None:
+    assert sanitise_profile_text(value, max_length) == expected
+
+
 @pytest.mark.parametrize("value", [None, "", "  \r\n  ", "<script></script>"])
 def test_empty_profile_text_is_stored_as_null(value: str | None) -> None:
     assert sanitise_profile_text(value, BIO_MAX_LENGTH) is None

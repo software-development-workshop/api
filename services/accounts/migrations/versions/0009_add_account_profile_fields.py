@@ -16,8 +16,10 @@ depends_on: Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column("accounts", sa.Column("bio", sa.String(160), nullable=True))
-    op.add_column("accounts", sa.Column("display_name", sa.String(50), nullable=True))
+    # The API limits logical text to 160/50 characters. Angle brackets are stored as
+    # four-character entities after sanitisation, so the columns retain that headroom.
+    op.add_column("accounts", sa.Column("bio", sa.String(640), nullable=True))
+    op.add_column("accounts", sa.Column("display_name", sa.String(200), nullable=True))
 
 
 def downgrade() -> None:

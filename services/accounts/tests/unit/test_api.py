@@ -195,6 +195,28 @@ def test_profile_update_removes_html_and_script_markup(
     assert "<" not in response.text
 
 
+def test_profile_update_counts_text_before_html_entity_encoding(
+    client: TestClient,
+    mailer: FakeMailer,
+    repository: FakeAccountsRepository,
+) -> None:
+    headers = authenticated_headers(client, mailer)
+    bio = "x" * 158 + " &"
+    display_name = "x" * 48 + " <"
+
+    response = client.patch(
+        "/api/v1/accounts/me",
+        headers=headers,
+        json={"bio": bio, "display_name": display_name},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["bio"] == bio
+    assert response.json()["display_name"] == "x" * 48 + " &lt;"
+    assert repository.accounts[0].bio == bio
+    assert repository.accounts[0].display_name == "x" * 48 + " &lt;"
+
+
 def test_profile_update_can_clear_optional_text_fields(
     client: TestClient, mailer: FakeMailer
 ) -> None:

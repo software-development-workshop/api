@@ -210,6 +210,22 @@ def test_persists_profile_fields_and_locks_only_active_accounts(session: Session
     assert repository.account_for_profile_update(stored.id) is None
 
 
+def test_persists_profile_text_with_html_escaping_at_the_logical_limit(
+    session: Session,
+) -> None:
+    repository = AccountsRepository(session)
+    stored = repository.add(account())
+    stored.bio = "x" * 158 + " &"
+    stored.display_name = "x" * 48 + " &lt;"
+
+    repository.save(stored)
+    session.expire_all()
+    reloaded = session.get(Account, stored.id)
+
+    assert reloaded.bio == "x" * 158 + " &"
+    assert reloaded.display_name == "x" * 48 + " &lt;"
+
+
 def test_duplicate_handle_on_profile_update_is_mapped_and_session_is_reusable(
     session: Session,
 ) -> None:

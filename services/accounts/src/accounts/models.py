@@ -24,8 +24,10 @@ class Account(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email: Mapped[str] = mapped_column(String(EMAIL_MAX_LENGTH))
     handle: Mapped[str] = mapped_column(String(HANDLE_MAX_LENGTH))
-    bio: Mapped[str | None] = mapped_column(String(160))
-    display_name: Mapped[str | None] = mapped_column(String(50))
+    # The API limits logical text to 160/50 characters. Angle brackets are stored as
+    # four-character entities after sanitisation, so the columns retain that headroom.
+    bio: Mapped[str | None] = mapped_column(String(640))
+    display_name: Mapped[str | None] = mapped_column(String(200))
     password_hash: Mapped[str] = mapped_column(String(255))
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
