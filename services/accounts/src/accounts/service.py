@@ -1,4 +1,6 @@
 import logging
+import uuid
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
@@ -12,6 +14,7 @@ from accounts.errors import (
     InvalidAccessTokenError,
     InvalidCredentialsError,
     InvalidPasswordResetTokenError,
+    InvalidProfileError,
     InvalidVerificationTokenError,
     PasswordUnchangedError,
     SuspendedAccountError,
@@ -21,6 +24,12 @@ from accounts.errors import (
 from accounts.models import Account, PasswordResetToken, VerificationToken
 from accounts.passwords import hash_password, verify_password
 from accounts.repository import AccountsRepository
+from accounts.validation import (
+    BIO_MAX_LENGTH,
+    DISPLAY_NAME_MAX_LENGTH,
+    normalise_handle,
+    sanitise_profile_text,
+)
 
 VERIFICATION_TTL = timedelta(hours=24)
 MAX_FAILED_LOGIN_ATTEMPTS = 5
@@ -145,6 +154,39 @@ def authenticate(
 
     repository.finish_login_attempt(account)
     return account
+
+
+def update_profile(
+    repository: AccountsRepository,
+    account_id: uuid.UUID,
+    changes: Mapping[str, str | None],
+) -> Account:
+    """Update editable profile fields for the account identified by a valid access token."""
+    allowed_fields = {"handle", "bio", "display_name"}
+    unknown_fields = set(changes) - allowed_fields
+    if unknown_fields:
+        raise InvalidProfileError("Only handle, bio and display_name can be updated.")
+
+    account = repository.account_for_profile_update(account_id)
+    if account is None:
+        raise InvalidAccessTokenError("Invalid access token.")
+
+    try:
+        if "handle" in changes:
+            raw_handle = changes["handle"]
+            if raw_handle is None:
+                raise ValueError("handle must not be empty or null")
+            account.handle = normalise_handle(raw_handle)
+        if "bio" in changes:
+            account.bio = sanitise_profile_text(changes["bio"], BIO_MAX_LENGTH)
+        if "display_name" in changes:
+            account.display_name = sanitise_profile_text(
+                changes["display_name"], DISPLAY_NAME_MAX_LENGTH
+            )
+    except ValueError as error:
+        raise InvalidProfileError(str(error)) from error
+
+    return repository.save(account)
 
 
 def register(

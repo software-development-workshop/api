@@ -1,6 +1,7 @@
 import uuid
 from datetime import UTC, datetime, timedelta
 
+from accounts.errors import HandleTakenError
 from accounts.models import Account, PasswordResetToken, VerificationToken
 
 
@@ -52,7 +53,24 @@ class FakeAccountsRepository:
         return self.find_for_login(identifier)
 
     def save(self, account: Account) -> Account:
+        if any(
+            other.id != account.id and other.handle.lower() == account.handle.lower()
+            for other in self.accounts
+        ):
+            raise HandleTakenError("That handle is already taken.")
         return account
+
+    def account_for_profile_update(self, account_id: uuid.UUID) -> Account | None:
+        return next(
+            (
+                account
+                for account in self.accounts
+                if account.id == account_id
+                and account.suspended_at is None
+                and account.deleted_at is None
+            ),
+            None,
+        )
 
     def finish_login_attempt(self, account: Account | None) -> Account | None:
         self.completed_login_attempts += 1

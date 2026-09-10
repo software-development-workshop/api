@@ -1,7 +1,12 @@
 import re
+from html import unescape
+
+import nh3
 
 HANDLE_MIN_LENGTH = 4
 HANDLE_MAX_LENGTH = 15
+BIO_MAX_LENGTH = 160
+DISPLAY_NAME_MAX_LENGTH = 50
 PASSWORD_MIN_LENGTH = 8
 PASSWORD_MAX_LENGTH = 128
 
@@ -20,6 +25,36 @@ def normalise_handle(value: str) -> str:
             "letters, numbers or underscores"
         )
     return value[1:].lower()
+
+
+def sanitise_profile_text(value: str | None, max_length: int) -> str | None:
+    """Strip markup from optional profile text and enforce its logical size.
+
+    Empty values intentionally become NULL so clearing a profile field has the same
+    representation whether the client sends whitespace or an empty string. ``nh3``
+    serialises text as HTML, so decode its entities once before measuring and storing
+    the result; angle brackets are escaped again to keep the stored value safe.
+    """
+    if value is None:
+        return None
+
+    normalised = value.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not normalised:
+        return None
+    logical_input = normalised.replace("&lt;", "<").replace("&gt;", ">")
+    if len(logical_input) > max_length:
+        raise ValueError(f"must be at most {max_length} characters long")
+
+    sanitised = nh3.clean(normalised, tags=set()).strip()
+    if not sanitised:
+        return None
+
+    logical_text = unescape(sanitised).strip()
+    if not logical_text:
+        return None
+    if len(logical_text) > max_length:
+        raise ValueError(f"must be at most {max_length} characters after sanitisation")
+    return logical_text.replace("<", "&lt;").replace(">", "&gt;")
 
 
 def validate_password(value: str) -> str:
