@@ -1,4 +1,4 @@
-# ADR-0011: Límite compartido de intentos de contraseña para Login y baja
+# ADR-0012: Límite compartido de intentos de contraseña para Login y baja
 
 - **Estado:** aceptado
 - **Fecha:** 2026-09-07

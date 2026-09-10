@@ -6,7 +6,7 @@ import jwt
 import pytest
 from fastapi.testclient import TestClient
 
-from accounts import tokens
+from accounts import recovery, tokens
 from accounts.access_tokens import issue
 from accounts.api import get_mailer, get_repository
 from accounts.config import get_settings
@@ -28,8 +28,10 @@ class RefusingMailer:
 
 
 @pytest.fixture
-def repository() -> Iterator[FakeAccountsRepository]:
+def repository(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeAccountsRepository]:
     fake = FakeAccountsRepository()
+    monkeypatch.setattr(recovery, "get_engine", lambda: None)
+    monkeypatch.setattr(recovery, "AccountsRepository", lambda session: fake)
     app.dependency_overrides[get_repository] = lambda: fake
     yield fake
     app.dependency_overrides.clear()

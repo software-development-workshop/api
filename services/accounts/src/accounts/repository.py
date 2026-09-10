@@ -157,7 +157,11 @@ class AccountsRepository:
         if account is None:  # pragma: no cover - the foreign key makes this unreachable
             raise LookupError("password reset token points at a missing account")
 
-        if account.deleted_at is not None or account.suspended_at is not None:
+        if (
+            account.verified_at is None
+            or account.suspended_at is not None
+            or account.deleted_at is not None
+        ):
             self._session.rollback()
             return None
 
@@ -254,7 +258,11 @@ class AccountsRepository:
         account = self._lock_account(token.account_id)
         if account is None:  # pragma: no cover - the foreign key makes this unreachable
             raise LookupError("verification token points at a missing account")
-        if account.verified_at is not None or account.deleted_at is not None:
+        if (
+            account.verified_at is not None
+            or account.suspended_at is not None
+            or account.deleted_at is not None
+        ):
             self._session.rollback()
             return None
 
