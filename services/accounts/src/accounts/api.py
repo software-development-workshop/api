@@ -1,30 +1,46 @@
 import uuid
 from typing import Annotated, Literal, Self
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, EmailStr, StringConstraints, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 from sqlalchemy.orm import Session
 
-from accounts import access_tokens
+from accounts import access_tokens, recovery
 from accounts.config import API_PREFIX, Settings, get_settings
 from accounts.db import get_session
 from accounts.email import ResendMailer
 from accounts.errors import InvalidAccessTokenError
-from accounts.models import Account
+from accounts.models import (
+    BIO_MAX_STORAGE_LENGTH,
+    DISPLAY_NAME_MAX_STORAGE_LENGTH,
+    HANDLE_MAX_LENGTH,
+    Account,
+)
 from accounts.repository import AccountsRepository
 from accounts.service import (
     Mailer,
     authenticate,
+    delete_account,
     register,
-    request_password_reset,
-    resend_verification,
     reset_password,
     revoke_access_token,
+    update_profile,
     validate_access_token,
     verify,
 )
-from accounts.validation import normalise_handle, validate_password
+from accounts.validation import (
+    normalise_handle,
+    validate_password,
+)
 
 router = APIRouter(prefix=API_PREFIX)
 
@@ -35,7 +51,7 @@ def get_repository(session: SessionDep) -> AccountsRepository:
     return AccountsRepository(session)
 
 
-def get_mailer() -> Mailer:
+async def get_mailer() -> Mailer:
     return ResendMailer()
 
 
@@ -81,6 +97,10 @@ class SessionRequest(BaseModel):
     password: Password
 
 
+class AccountDeletionRequest(BaseModel):
+    password: Password
+
+
 class SessionResponse(BaseModel):
     access_token: str
     token_type: Literal["bearer"] = "bearer"  # noqa: S105
@@ -111,10 +131,29 @@ class PasswordResetCompletion(BaseModel):
         return self
 
 
+class ProfileUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    handle: str | None = Field(default=None, max_length=HANDLE_MAX_LENGTH + 1)
+    # Accept the escaped representation returned by the endpoint; the service enforces
+    # the logical 160/50-character limits after normalising it.
+    bio: str | None = Field(default=None, max_length=BIO_MAX_STORAGE_LENGTH)
+    display_name: str | None = Field(default=None, max_length=DISPLAY_NAME_MAX_STORAGE_LENGTH)
+
+    @field_validator("handle")
+    @classmethod
+    def _require_handle_when_present(cls, value: str | None) -> str:
+        if value is None:
+            raise ValueError("handle must not be empty or null")
+        return value
+
+
 class AccountResponse(BaseModel):
     id: uuid.UUID
     email: str
     handle: str
+    bio: str | None
+    display_name: str | None
     verified: bool
 
 
@@ -123,6 +162,8 @@ def _as_response(account: Account) -> AccountResponse:
         id=account.id,
         email=account.email,
         handle=f"@{account.handle}",
+        bio=account.bio,
+        display_name=account.display_name,
         verified=account.verified_at is not None,
     )
 
@@ -140,16 +181,18 @@ def verify_account(token: str, repository: RepositoryDep) -> AccountResponse:
 
 
 @router.post("/verifications/resend", status_code=status.HTTP_202_ACCEPTED)
-def resend(body: ResendRequest, repository: RepositoryDep, mailer: MailerDep) -> Response:
-    resend_verification(repository, mailer, body.email)
+async def resend(
+    body: ResendRequest, background_tasks: BackgroundTasks, mailer: MailerDep
+) -> Response:
+    background_tasks.add_task(recovery.resend_verification, body.email, mailer)
     return Response(status_code=status.HTTP_202_ACCEPTED)
 
 
 @router.post("/password-resets", status_code=status.HTTP_202_ACCEPTED)
-def request_reset(
-    body: PasswordResetRequest, repository: RepositoryDep, mailer: MailerDep
+async def request_reset(
+    body: PasswordResetRequest, background_tasks: BackgroundTasks, mailer: MailerDep
 ) -> Response:
-    request_password_reset(repository, mailer, body.identifier)
+    background_tasks.add_task(recovery.request_password_reset, body.identifier, mailer)
     return Response(status_code=status.HTTP_202_ACCEPTED)
 
 
@@ -163,6 +206,21 @@ def complete_reset(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+@router.patch("/accounts/me")
+def update_current_account(
+    body: ProfileUpdateRequest,
+    credentials: BearerDep,
+    repository: RepositoryDep,
+    settings: SettingsDep,
+) -> AccountResponse:
+    token = credentials.credentials if credentials is not None else None
+    if token is None:
+        raise InvalidAccessTokenError("Invalid access token.")
+    claims = validate_access_token(repository, token, settings.jwt_secret)
+    changes: dict[str, str | None] = body.model_dump(exclude_unset=True)
+    return _as_response(update_profile(repository, claims.subject, changes))
+
+
 @router.post("/sessions")
 def create_session(
     body: SessionRequest, repository: RepositoryDep, settings: SettingsDep
@@ -174,6 +232,18 @@ def create_session(
         session_version=account.session_version,
     )
     return SessionResponse(access_token=issued.token, expires_in=issued.expires_in)
+
+
+@router.post("/account-deletions", status_code=status.HTTP_204_NO_CONTENT)
+def confirm_account_deletion(
+    body: AccountDeletionRequest,
+    credentials: BearerDep,
+    repository: RepositoryDep,
+    settings: SettingsDep,
+) -> Response:
+    token = credentials.credentials if credentials is not None else None
+    delete_account(repository, token, body.password, settings.jwt_secret)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/sessions/introspect")

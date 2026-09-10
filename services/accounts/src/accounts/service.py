@@ -1,4 +1,6 @@
 import logging
+import uuid
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
@@ -12,6 +14,7 @@ from accounts.errors import (
     InvalidAccessTokenError,
     InvalidCredentialsError,
     InvalidPasswordResetTokenError,
+    InvalidProfileError,
     InvalidVerificationTokenError,
     PasswordUnchangedError,
     SuspendedAccountError,
@@ -21,6 +24,12 @@ from accounts.errors import (
 from accounts.models import Account, PasswordResetToken, VerificationToken
 from accounts.passwords import hash_password, verify_password
 from accounts.repository import AccountsRepository
+from accounts.validation import (
+    BIO_MAX_LENGTH,
+    DISPLAY_NAME_MAX_LENGTH,
+    normalise_handle,
+    sanitise_profile_text,
+)
 
 VERIFICATION_TTL = timedelta(hours=24)
 MAX_FAILED_LOGIN_ATTEMPTS = 5
@@ -28,6 +37,8 @@ LOGIN_LOCK_TTL = timedelta(minutes=15)
 PASSWORD_RESET_TTL = timedelta(minutes=10)
 PASSWORD_RESET_WINDOW = timedelta(minutes=15)
 PASSWORD_RESET_LIMIT = 3
+VERIFICATION_WINDOW = timedelta(minutes=15)
+VERIFICATION_LIMIT = 3
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +71,47 @@ def validate_access_token(
     if repository.active_session_version_for(claims.subject) != claims.session_version:
         raise InvalidAccessTokenError("Invalid access token.")
     return claims
+
+
+def delete_account(
+    repository: AccountsRepository,
+    token: str | None,
+    password: str,
+    secret: str,
+    now: datetime | None = None,
+) -> None:
+    if token is None:
+        raise InvalidAccessTokenError("Invalid access token.")
+    try:
+        claims = access_tokens.decode(token, secret)
+    except access_tokens.InvalidAccessTokenError as error:
+        raise InvalidAccessTokenError("Invalid access token.") from error
+
+    try:
+        account = repository.account_for_deletion(claims.subject)
+        if account is None:
+            raise InvalidAccessTokenError("Invalid access token.")
+        # Decode again: waiting for the row may outlive a JWT or a password change.
+        validate_access_token(repository, token, secret)
+        if account.verified_at is None:
+            raise UnverifiedAccountError("Account not verified. Check your inbox.")
+
+        attempted_at = now or datetime.now(UTC)
+        if account.locked_until is not None and account.locked_until > attempted_at:
+            raise AccountTemporarilyLockedError("Account temporarily locked. Try again later.")
+        if account.locked_until is not None:
+            account.failed_login_attempts = 0
+            account.locked_until = None
+        if not verify_password(account.password_hash, password):
+            account.failed_login_attempts += 1
+            if account.failed_login_attempts >= MAX_FAILED_LOGIN_ATTEMPTS:
+                account.locked_until = attempted_at + LOGIN_LOCK_TTL
+            repository.finish_deletion_attempt(account)
+            raise InvalidCredentialsError("Invalid credentials.")
+
+        repository.finish_deletion_attempt(account, deleted_at=attempted_at)
+    finally:
+        repository.rollback()
 
 
 def authenticate(
@@ -102,6 +154,39 @@ def authenticate(
 
     repository.finish_login_attempt(account)
     return account
+
+
+def update_profile(
+    repository: AccountsRepository,
+    account_id: uuid.UUID,
+    changes: Mapping[str, str | None],
+) -> Account:
+    """Update editable profile fields for the account identified by a valid access token."""
+    allowed_fields = {"handle", "bio", "display_name"}
+    unknown_fields = set(changes) - allowed_fields
+    if unknown_fields:
+        raise InvalidProfileError("Only handle, bio and display_name can be updated.")
+
+    account = repository.account_for_profile_update(account_id)
+    if account is None:
+        raise InvalidAccessTokenError("Invalid access token.")
+
+    try:
+        if "handle" in changes:
+            raw_handle = changes["handle"]
+            if raw_handle is None:
+                raise ValueError("handle must not be empty or null")
+            account.handle = normalise_handle(raw_handle)
+        if "bio" in changes:
+            account.bio = sanitise_profile_text(changes["bio"], BIO_MAX_LENGTH)
+        if "display_name" in changes:
+            account.display_name = sanitise_profile_text(
+                changes["display_name"], DISPLAY_NAME_MAX_LENGTH
+            )
+    except ValueError as error:
+        raise InvalidProfileError(str(error)) from error
+
+    return repository.save(account)
 
 
 def register(
@@ -157,7 +242,12 @@ def resend_verification(repository: AccountsRepository, mailer: Mailer, email: s
     this endpoint into a way to find out who has an account.
     """
     account = repository.find_by_email(email)
-    if account is None or account.verified_at is not None:
+    if (
+        account is None
+        or account.verified_at is not None
+        or account.suspended_at is not None
+        or account.deleted_at is not None
+    ):
         return
     try:
         _issue_verification(repository, mailer, account)
@@ -217,30 +307,37 @@ def reset_password(
             "That password reset link expired. Ask for a new one from the login screen."
         )
 
-    account = repository.account_for_password_reset(record.account_id)
-    if account is None:  # pragma: no cover - the foreign key makes this unreachable
-        raise InvalidPasswordResetTokenError("That password reset link is not valid.")
-    if verify_password(account.password_hash, new_password):
-        raise PasswordUnchangedError("The new password must differ from the current password.")
+    try:
+        account = repository.account_for_password_reset(record.account_id)
+        if account is None:
+            raise InvalidPasswordResetTokenError("That password reset link is not valid.")
+        if verify_password(account.password_hash, new_password):
+            raise PasswordUnchangedError("The new password must differ from the current password.")
 
-    changed = repository.consume_password_reset(
-        record,
-        hash_password(new_password),
-        changed_at=changed_at,
-    )
-    if changed is None:
-        raise InvalidPasswordResetTokenError("That password reset link is not valid.")
-    return changed
+        changed = repository.consume_password_reset(
+            record,
+            hash_password(new_password),
+            changed_at=changed_at,
+        )
+        if changed is None:
+            raise InvalidPasswordResetTokenError("That password reset link is not valid.")
+        return changed
+    finally:
+        repository.rollback()
 
 
 def _issue_verification(repository: AccountsRepository, mailer: Mailer, account: Account) -> None:
+    issued_at = datetime.now(UTC)
     token = tokens.generate()
     issued = repository.issue_token(
         VerificationToken(
             account_id=account.id,
             token_digest=tokens.digest(token),
-            expires_at=datetime.now(UTC) + VERIFICATION_TTL,
-        )
+            expires_at=issued_at + VERIFICATION_TTL,
+            created_at=issued_at,
+        ),
+        window=VERIFICATION_WINDOW,
+        limit=VERIFICATION_LIMIT,
     )
     if issued is None:
         return

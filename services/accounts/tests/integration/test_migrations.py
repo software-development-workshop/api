@@ -18,6 +18,28 @@ NONCANONICAL_STRONGER_HASH = PasswordHasher(
 ).hash("Passw0rd")
 
 
+def test_profile_columns_are_nullable_and_have_the_declared_limits() -> None:
+    with get_engine().connect() as connection:
+        columns = {
+            row.column_name: (row.character_maximum_length, row.is_nullable)
+            for row in connection.execute(
+                text(
+                    """
+                    SELECT column_name, character_maximum_length, is_nullable
+                    FROM information_schema.columns
+                    WHERE table_name = 'accounts'
+                      AND column_name IN ('bio', 'display_name')
+                    """
+                )
+            )
+        }
+
+    assert columns == {
+        "bio": (640, "YES"),
+        "display_name": (200, "YES"),
+    }
+
+
 def test_password_hash_migration_rejects_noncanonical_stronger_parameters() -> None:
     config = Config("alembic.ini")
     engine = get_engine()

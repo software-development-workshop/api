@@ -1,4 +1,5 @@
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy.exc import IntegrityError
@@ -52,14 +53,24 @@ class LookupSession:
         self.value = value
         self.statements: list[object] = []
         self.get_calls: list[tuple[object, uuid.UUID]] = []
+        self.get_options: dict[str, object] = {}
+        self.committed = False
+        self.rolled_back = False
 
     def execute(self, statement: object) -> ScalarResult:
         self.statements.append(statement)
         return ScalarResult(self.value)
 
-    def get(self, model: object, account_id: uuid.UUID) -> object:
+    def get(self, model: object, account_id: uuid.UUID, **kwargs: object) -> object:
         self.get_calls.append((model, account_id))
+        self.get_options = kwargs
         return self.value
+
+    def commit(self) -> None:
+        self.committed = True
+
+    def rollback(self) -> None:
+        self.rolled_back = True
 
 
 @pytest.mark.parametrize(
@@ -155,3 +166,64 @@ def test_password_reset_account_lookup_uses_the_account_id() -> None:
 
     assert found is account
     assert session.get_calls == [(Account, account_id)]
+    assert session.get_options == {"with_for_update": True, "populate_existing": True}
+
+
+@pytest.mark.parametrize("state", ["deleted_at", "suspended_at"])
+def test_inactive_password_reset_lookup_rolls_back_without_returning_identity(state: str) -> None:
+    account = Account(id=uuid.uuid4(), **{state: datetime.now(UTC)})
+    session = LookupSession(account)
+    found = AccountsRepository(session).account_for_password_reset(account.id)
+    assert found is None
+    assert session.rolled_back
+
+
+def test_deletion_lookup_locks_and_refreshes_only_the_requested_account() -> None:
+    account_id = uuid.uuid4()
+    account = Account(id=account_id)
+    session = LookupSession(account)
+    found = AccountsRepository(session).account_for_deletion(account_id)
+    assert found is account
+    assert session.get_calls == [(Account, account_id)]
+    assert session.get_options == {"with_for_update": True, "populate_existing": True}
+
+
+def test_confirmed_deletion_spends_only_unused_links_for_its_account() -> None:
+    now = datetime.now(UTC)
+    account = Account(
+        id=uuid.uuid4(),
+        session_version=3,
+        failed_login_attempts=2,
+        locked_until=now,
+    )
+    session = LookupSession(account)
+    AccountsRepository(session).finish_deletion_attempt(account, deleted_at=now)
+    assert account.deleted_at == now
+    assert account.session_version == 4
+    assert account.failed_login_attempts == 0
+    assert account.locked_until is None
+    assert session.committed
+    assert len(session.statements) == 2
+    for statement, table in zip(
+        session.statements,
+        ("verification_tokens", "password_reset_tokens"),
+        strict=True,
+    ):
+        query = str(statement)
+        assert f"UPDATE {table}" in query
+        assert f"{table}.account_id =" in query
+        assert f"{table}.used_at IS NULL" in query
+        params = statement.compile().params
+        assert account.id in params.values()
+        assert params["used_at"] == now
+
+
+def test_failed_deletion_commits_count_without_spending_links_or_changing_version() -> None:
+    account = Account(id=uuid.uuid4(), session_version=2, failed_login_attempts=1)
+    session = LookupSession(account)
+    AccountsRepository(session).finish_deletion_attempt(account)
+    assert session.committed
+    assert session.statements == []
+    assert account.deleted_at is None
+    assert account.session_version == 2
+    assert account.failed_login_attempts == 1

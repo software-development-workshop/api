@@ -48,6 +48,20 @@ exercise the flow without filling your own inbox.
 
 ## Work on a service
 
+### Recovery responses
+
+`POST /api/v1/password-resets` and `POST /api/v1/verifications/resend` return an empty `202`
+after validating the request, before looking up the account or sending mail. A task in the
+API process then checks eligibility and sends the link using its own database session.
+`202` does not confirm that an account exists or that an email was delivered.
+
+These tasks are not durable: a process crash can interrupt them, and the user must request
+another link. A handled password-reset delivery failure invalidates that attempt's token.
+Registration still waits for its email and returns `502` Problem Details if delivery fails.
+See [ADR-0011](docs/adr/0011-recuperacion-despues-de-la-respuesta.md) for the tradeoffs.
+
+### Local development
+
 Each service is a self-contained `uv` project.
 
 ```bash
@@ -120,6 +134,46 @@ $postBody = @{ content = "Mi primera publicación" } | ConvertTo-Json
 Invoke-RestMethod -Method Post -Uri http://localhost:8001/api/v1/posts `
   -Headers $headers -ContentType "application/json" -Body $postBody
 ```
+
+## Delete the authenticated account
+
+With the Bearer headers from the Login example above, confirm the account's current password:
+
+```powershell
+$deletionBody = @{ password = "Passw0rd" } | ConvertTo-Json
+Invoke-WebRequest -Method Post -Uri http://localhost:8000/api/v1/account-deletions `
+  -Headers $headers -ContentType "application/json" -Body $deletionBody
+```
+
+Success returns `204` with no body. The account is selected from the JWT, never a client-supplied
+account ID. The password is checked exactly, including spaces. The transaction preserves the
+account UUID and references, sets `deleted_at`, increments `session_version`, and invalidates
+all pending verification and password-reset links. Existing JWTs fail introspection and new
+Posts requests with `401`; Login can no longer issue sessions for the deleted account.
+
+Login and deletion share five consecutive wrong-password attempts and a 15-minute lockout.
+The fifth failed confirmation returns `401 invalid-credentials` and starts the lock; subsequent
+confirmations return `423 account-temporarily-locked` without checking the password or extending
+the window. Wrong confirmations only modify the failure counter and lock. A successful Login
+or password recovery resets the shared budget; recovery also invalidates the old JWTs.
+
+Invalid, revoked or obsolete JWTs and suspended/deleted accounts return `401 invalid-access-token`.
+An unverified account returns `403 unverified-account`; an invalid body returns `422 validation-error`.
+Retrying a successful deletion with an old JWT returns `401`. Errors use `application/problem+json`.
+
+This is the Accounts-only slice of [#20](https://github.com/software-development-workshop/udesa-x/issues/20):
+email, handle and password hash are retained and the identifiers stay reserved. It does not
+implement complete erasure, mobile confirmation, follow cleanup, feed filtering, or deleted-author
+display in replies/reposts. The [approved design](docs/designs/account-deletion.md) records the
+remaining scope and retention decision; [ADR-0012](docs/adr/0012-limite-compartido-de-login-y-baja.md)
+explains the shared lockout and its tradeoff.
+
+The unit and PostgreSQL integration commands above cover deletion, old-session and link rejection,
+shared failure budgets and races. Run integration tests only against a disposable test database;
+the fixtures truncate its account tables. To exercise the running services, issue two sessions
+for a verified test account and create a post, submit an incorrect confirmation, then confirm
+with the current password. Both sessions must fail introspection and publishing afterward,
+and the retained database row must have `deleted_at` set and `session_version` incremented.
 
 ## How we work
 

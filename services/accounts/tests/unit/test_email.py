@@ -5,6 +5,7 @@ import resend
 import resend.exceptions
 from fastapi.testclient import TestClient
 
+from accounts import recovery
 from accounts.api import get_repository
 from accounts.config import get_settings
 from accounts.email import ResendMailer
@@ -165,6 +166,8 @@ def test_resend_keeps_generic_response_when_provider_returns_null(
     null_provider_response: None, monkeypatch: pytest.MonkeyPatch, email: str
 ) -> None:
     repository = FakeAccountsRepository()
+    monkeypatch.setattr(recovery, "get_engine", lambda: None)
+    monkeypatch.setattr(recovery, "AccountsRepository", lambda session: repository)
     repository.add(Account(email="juan@udesa.edu.ar", handle="juan"))
     monkeypatch.setitem(app.dependency_overrides, get_repository, lambda: repository)
 
