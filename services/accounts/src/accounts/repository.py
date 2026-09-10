@@ -129,6 +129,14 @@ class AccountsRepository:
         if account is None:  # pragma: no cover - the foreign key makes this unreachable
             raise LookupError("password reset token points at a missing account")
 
+        if (
+            account.verified_at is None
+            or account.suspended_at is not None
+            or account.deleted_at is not None
+        ):
+            self._session.rollback()
+            return None
+
         issued_in_window = self._session.execute(
             select(func.count(PasswordResetToken.id))
             .where(PasswordResetToken.account_id == token.account_id)
@@ -226,7 +234,11 @@ class AccountsRepository:
             .with_for_update()
             .execution_options(populate_existing=True)
         ).scalar_one()
-        if account.verified_at is not None:
+        if (
+            account.verified_at is not None
+            or account.suspended_at is not None
+            or account.deleted_at is not None
+        ):
             self._session.rollback()
             return None
 

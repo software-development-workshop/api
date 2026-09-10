@@ -48,6 +48,20 @@ exercise the flow without filling your own inbox.
 
 ## Work on a service
 
+### Recovery responses
+
+`POST /api/v1/password-resets` and `POST /api/v1/verifications/resend` return an empty `202`
+after validating the request, before looking up the account or sending mail. A task in the
+API process then checks eligibility and sends the link using its own database session.
+`202` does not confirm that an account exists or that an email was delivered.
+
+These tasks are not durable: a process crash can interrupt them, and the user must request
+another link. A handled password-reset delivery failure invalidates that attempt's token.
+Registration still waits for its email and returns `502` Problem Details if delivery fails.
+See [ADR-0011](docs/adr/0011-recuperacion-despues-de-la-respuesta.md) for the tradeoffs.
+
+### Local development
+
 Each service is a self-contained `uv` project.
 
 ```bash
