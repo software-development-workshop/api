@@ -61,7 +61,12 @@ class AccountsRepository:
         lock_material = f"{identifier_kind}:{canonical}".encode()
         lock_key = int.from_bytes(sha256(lock_material).digest()[:8], byteorder="big", signed=True)
         self._session.execute(select(func.pg_advisory_xact_lock(lock_key)))
-        statement = select(Account).where(func.lower(column) == canonical).with_for_update()
+        statement = (
+            select(Account)
+            .where(func.lower(column) == canonical)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         return self._session.execute(statement).scalar_one_or_none()
 
     def find_by_identifier(self, identifier: str) -> Account | None:
@@ -84,6 +89,28 @@ class AccountsRepository:
     def finish_login_attempt(self, account: Account | None) -> Account | None:
         self._session.commit()
         return account
+
+    def account_for_deletion(self, account_id: uuid.UUID) -> Account | None:
+        return self._lock_account(account_id)
+
+    def finish_deletion_attempt(
+        self, account: Account, *, deleted_at: datetime | None = None
+    ) -> None:
+        if deleted_at is not None:
+            account.deleted_at = deleted_at
+            account.session_version += 1
+            account.failed_login_attempts = 0
+            account.locked_until = None
+            for model in (VerificationToken, PasswordResetToken):
+                self._session.execute(
+                    update(model)
+                    .where(model.account_id == account.id, model.used_at.is_(None))
+                    .values(used_at=deleted_at)
+                )
+        self._session.commit()
+
+    def rollback(self) -> None:
+        self._session.rollback()
 
     def revoke_access_token(self, jti: uuid.UUID, expires_at: datetime) -> None:
         statement = pg_insert(RevokedAccessToken).values(jti=jti, expires_at=expires_at)
@@ -111,7 +138,13 @@ class AccountsRepository:
         return self._session.execute(statement).scalar_one_or_none()
 
     def account_for_password_reset(self, account_id: uuid.UUID) -> Account | None:
-        return self._session.get(Account, account_id)
+        account = self._lock_account(account_id)
+        if account is not None and (
+            account.deleted_at is not None or account.suspended_at is not None
+        ):
+            self._session.rollback()
+            return None
+        return account
 
     def issue_password_reset(
         self,
@@ -120,12 +153,7 @@ class AccountsRepository:
         window: timedelta,
         limit: int,
     ) -> PasswordResetToken | None:
-        account = self._session.execute(
-            select(Account)
-            .where(Account.id == token.account_id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        ).scalar_one_or_none()
+        account = self._lock_account(token.account_id)
         if account is None:  # pragma: no cover - the foreign key makes this unreachable
             raise LookupError("password reset token points at a missing account")
 
@@ -178,14 +206,13 @@ class AccountsRepository:
         *,
         changed_at: datetime,
     ) -> Account | None:
-        account = self._session.execute(
-            select(Account)
-            .where(Account.id == token.account_id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        ).scalar_one_or_none()
+        account = self._lock_account(token.account_id)
         if account is None:  # pragma: no cover - the foreign key makes this unreachable
             raise LookupError("password reset token points at a missing account")
+
+        if account.deleted_at is not None or account.suspended_at is not None:
+            self._session.rollback()
+            return None
 
         spent = self._session.execute(
             update(PasswordResetToken)
@@ -228,12 +255,9 @@ class AccountsRepository:
         the tokens they can see and then insert their own, and the account ends up with two
         usable links instead of one.
         """
-        account = self._session.execute(
-            select(Account)
-            .where(Account.id == token.account_id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        ).scalar_one()
+        account = self._lock_account(token.account_id)
+        if account is None:  # pragma: no cover - the foreign key makes this unreachable
+            raise LookupError("verification token points at a missing account")
         if (
             account.verified_at is not None
             or account.suspended_at is not None
@@ -270,15 +294,10 @@ class AccountsRepository:
         here. Verifying the account in the same transaction keeps the two facts from ever
         disagreeing.
         """
-        account = self._session.execute(
-            select(Account)
-            .where(Account.id == token.account_id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        ).scalar_one_or_none()
+        account = self._lock_account(token.account_id)
         if account is None:  # pragma: no cover - the foreign key makes this unreachable
             raise LookupError("verification token points at a missing account")
-        if account.verified_at is not None:
+        if account.verified_at is not None or account.deleted_at is not None:
             self._session.rollback()
             return None
 
@@ -297,6 +316,9 @@ class AccountsRepository:
         self._session.commit()
         self._session.refresh(account)
         return account
+
+    def _lock_account(self, account_id: uuid.UUID) -> Account | None:
+        return self._session.get(Account, account_id, with_for_update=True, populate_existing=True)
 
     def _exists(self, column: object, value: str) -> bool:
         statement = select(Account.id).where(func.lower(column) == value.lower()).limit(1)

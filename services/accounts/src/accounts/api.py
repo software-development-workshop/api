@@ -16,6 +16,7 @@ from accounts.repository import AccountsRepository
 from accounts.service import (
     Mailer,
     authenticate,
+    delete_account,
     register,
     reset_password,
     revoke_access_token,
@@ -76,6 +77,10 @@ class ResendRequest(BaseModel):
 
 class SessionRequest(BaseModel):
     identifier: Identifier
+    password: Password
+
+
+class AccountDeletionRequest(BaseModel):
     password: Password
 
 
@@ -174,6 +179,18 @@ def create_session(
         session_version=account.session_version,
     )
     return SessionResponse(access_token=issued.token, expires_in=issued.expires_in)
+
+
+@router.post("/account-deletions", status_code=status.HTTP_204_NO_CONTENT)
+def confirm_account_deletion(
+    body: AccountDeletionRequest,
+    credentials: BearerDep,
+    repository: RepositoryDep,
+    settings: SettingsDep,
+) -> Response:
+    token = credentials.credentials if credentials is not None else None
+    delete_account(repository, token, body.password, settings.jwt_secret)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/sessions/introspect")
