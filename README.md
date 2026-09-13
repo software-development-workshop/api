@@ -12,6 +12,9 @@ containerised and owns its own database; they share a repository, not a runtime.
 | [accounts](services/accounts) | Python 3.13 + FastAPI | 8000 |
 | [posts](services/posts) | Python 3.13 + FastAPI | 8001 |
 
+The end-user [mobile app](apps/mobile/README.md) lives in `apps/mobile/` and uses
+Expo, React Native and TypeScript. It has its own dependencies, tests and CI workflow.
+
 ## Run it
 
 From a clean clone, with Docker running:
@@ -47,6 +50,39 @@ inbox. Send to `delivered@resend.dev` to
 exercise the flow without filling your own inbox.
 
 ## Work on a service
+
+### Connect a physical phone
+
+Use Docker Compose **2.24.4 or later**, Node.js 24 LTS and a phone with a compatible
+[Expo Go](https://expo.dev/go) client. Configure the backend variables in **Run it** first.
+From the repository root, opt into LAN access for the APIs:
+
+```powershell
+docker compose -f compose.yaml -f compose.mobile.yaml up --build -d
+Get-NetIPConfiguration | Where-Object IPv4DefaultGateway | Select-Object InterfaceAlias,IPv4Address
+```
+
+Choose the computer's Wi-Fi/Ethernet IPv4 address reachable by the phone, not Docker's
+virtual adapter. Connect both devices to the same trusted network. This override exposes
+API ports 8000 and 8001 on the LAN and binds both databases to `127.0.0.1`. It does not
+change the default Compose setup. If Windows Firewall prompts, allow the relevant app
+on your private network. Guest Wi-Fi/client isolation or a VPN can block device access.
+
+On the phone's browser, open `http://<computer-lan-ip>:8000/health` and
+`http://<computer-lan-ip>:8001/health`; both must return a healthy response before trying
+login. Then follow [mobile setup and the phone walkthrough](apps/mobile/README.md): set
+the two public API URLs to those origins, restart Metro after changing them, and scan
+the QR code. Use a previously registered and verified test account.
+
+`localhost` on a phone refers to the phone. Metro's `--tunnel` transports the JavaScript
+bundle, **not** traffic to Accounts or Posts. If using remotely deployed services, use
+their HTTPS origins instead. HTTP LAN access is only for local development.
+
+Stop with the same Compose files when the demo is over:
+
+```powershell
+docker compose -f compose.yaml -f compose.mobile.yaml stop
+```
 
 ### Recovery responses
 

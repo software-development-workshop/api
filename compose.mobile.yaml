@@ -1,0 +1,15 @@
+# Opt-in LAN access for phone development; databases stay on the host's loopback.
+# !override replaces port lists (Compose 2.24.4+), avoiding duplicate bindings.
+services:
+  accounts-db:
+    ports: !override
+      - "127.0.0.1:5433:5432"
+  accounts:
+    ports: !override
+      - "0.0.0.0:8000:8000"
+  posts-db:
+    ports: !override
+      - "127.0.0.1:5434:5432"
+  posts:
+    ports: !override
+      - "0.0.0.0:8001:8001"
