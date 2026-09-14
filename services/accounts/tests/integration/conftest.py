@@ -21,7 +21,8 @@ def session() -> Iterator[Session]:
     with Session(get_engine()) as session:
         yield session
         session.rollback()
-        session.execute(text("truncate table accounts cascade"))
+        # revoked_access_tokens has no foreign key to accounts, so the cascade never reaches it.
+        session.execute(text("truncate table accounts, revoked_access_tokens cascade"))
         session.commit()
 
 
