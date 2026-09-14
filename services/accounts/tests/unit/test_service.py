@@ -13,6 +13,7 @@ from accounts.errors import (
     InvalidAccessTokenError,
     InvalidCredentialsError,
     InvalidPasswordResetTokenError,
+    InvalidProfileError,
     InvalidVerificationTokenError,
     PasswordUnchangedError,
     SuspendedAccountError,
@@ -26,6 +27,7 @@ from accounts.service import (
     resend_verification,
     reset_password,
     revoke_access_token,
+    update_profile,
     validate_access_token,
     verify,
 )
@@ -71,6 +73,46 @@ def test_new_account_starts_unverified(
     repository: FakeAccountsRepository, mailer: FakeMailer
 ) -> None:
     assert sign_up(repository, mailer).verified_at is None
+
+
+def test_updates_and_sanitises_the_authenticated_account_profile(
+    repository: FakeAccountsRepository, mailer: FakeMailer
+) -> None:
+    account = active_account(repository, mailer)
+
+    changed = update_profile(
+        repository,
+        account.id,
+        {
+            "handle": "@nuevo",
+            "bio": "<b>Bio</b><script>alert(1)</script>",
+            "display_name": "  Juan  ",
+        },
+    )
+
+    assert changed is account
+    assert account.handle == "nuevo"
+    assert account.bio == "Bio"
+    assert account.display_name == "Juan"
+
+
+def test_profile_update_rejects_an_unusable_account(
+    repository: FakeAccountsRepository, mailer: FakeMailer
+) -> None:
+    account = active_account(repository, mailer)
+    account.deleted_at = LOGIN_TIME
+
+    with pytest.raises(InvalidAccessTokenError, match="Invalid access token"):
+        update_profile(repository, account.id, {"bio": "Bio"})
+
+
+def test_profile_update_rejects_unknown_fields(
+    repository: FakeAccountsRepository, mailer: FakeMailer
+) -> None:
+    account = active_account(repository, mailer)
+
+    with pytest.raises(InvalidProfileError, match="Only handle"):
+        update_profile(repository, account.id, {"email": "nuevo@udesa.edu.ar"})
 
 
 def test_sends_the_verification_link_to_the_address_that_registered(
@@ -185,6 +227,22 @@ def test_resend_stays_silent_for_an_address_nobody_registered(
     assert mailer.sent == []
 
 
+@pytest.mark.parametrize("state", ["suspended_at", "deleted_at"])
+def test_resend_does_not_issue_a_token_for_an_ineligible_unverified_account(
+    repository: FakeAccountsRepository, mailer: FakeMailer, state: str
+) -> None:
+    account = sign_up(repository, mailer)
+    setattr(account, state, datetime.now(UTC))
+    mailer.sent.clear()
+    original_tokens = list(repository.tokens)
+
+    resend_verification(repository, mailer, account.email)
+
+    assert mailer.sent == []
+    assert repository.tokens == original_tokens
+    assert original_tokens[0].used_at is None
+
+
 @pytest.mark.parametrize(
     "identifier",
     ["juan@udesa.edu.ar", "JUAN@UdeSA.edu.AR", "@juan", "@JUAN", "juan"],
@@ -240,6 +298,21 @@ def test_email_and_handle_requests_share_the_three_per_fifteen_minute_limit(
     live = [token for token in repository.password_reset_tokens if token.used_at is None]
     assert len(mailer.password_resets) == 3
     assert len(repository.password_reset_tokens) == 3
+    assert len(live) == 1
+
+
+def test_resend_shares_the_three_per_fifteen_minute_limit_with_registration(
+    repository: FakeAccountsRepository,
+    mailer: FakeMailer,
+) -> None:
+    sign_up(repository, mailer)  # already used 1 of the window's 3 slots
+
+    for _ in range(4):
+        resend_verification(repository, mailer, "juan@udesa.edu.ar")
+
+    live = [token for token in repository.tokens if token.used_at is None]
+    assert len(mailer.sent) == 3
+    assert len(repository.tokens) == 3
     assert len(live) == 1
 
 
@@ -370,7 +443,7 @@ def test_resend_does_not_send_when_no_replacement_token_was_issued(
 ) -> None:
     sign_up(repository, mailer)
     sent_so_far = len(mailer.sent)
-    repository.issue_token = lambda _: None  # type: ignore[method-assign]
+    repository.issue_token = lambda *args, **kwargs: None  # type: ignore[method-assign]
 
     resend_verification(repository, mailer, "juan@udesa.edu.ar")
 

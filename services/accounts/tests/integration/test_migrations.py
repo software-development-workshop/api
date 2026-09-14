@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from accounts.db import get_engine
 
 # Valid argon2id, but not the canonical login profile migration 0005 used to require.
-# Migration 0009 accepts it (any argon2id hash), so downgrading past 0009 while a row
+# Migration 0010 accepts it (any argon2id hash), so downgrading past 0010 while a row
 # like this exists must fail closed rather than silently re-tightening the rule under it.
 NONCANONICAL_ARGON2ID_HASH = PasswordHasher(
     memory_cost=32768,
@@ -19,7 +19,29 @@ NONCANONICAL_ARGON2ID_HASH = PasswordHasher(
 ).hash("Passw0rd")
 
 
-def test_migration_0009_cannot_be_downgraded_once_a_noncanonical_argon2id_hash_exists() -> None:
+def test_profile_columns_are_nullable_and_have_the_declared_limits() -> None:
+    with get_engine().connect() as connection:
+        columns = {
+            row.column_name: (row.character_maximum_length, row.is_nullable)
+            for row in connection.execute(
+                text(
+                    """
+                    SELECT column_name, character_maximum_length, is_nullable
+                    FROM information_schema.columns
+                    WHERE table_name = 'accounts'
+                      AND column_name IN ('bio', 'display_name')
+                    """
+                )
+            )
+        }
+
+    assert columns == {
+        "bio": (640, "YES"),
+        "display_name": (200, "YES"),
+    }
+
+
+def test_migration_0010_cannot_be_downgraded_once_a_noncanonical_argon2id_hash_exists() -> None:
     config = Config("alembic.ini")
     engine = get_engine()
     account_id = uuid.uuid4()

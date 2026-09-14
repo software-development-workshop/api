@@ -64,6 +64,12 @@ class InvalidAccessTokenError(DomainError):
     title = "Invalid access token"
 
 
+class InvalidProfileError(DomainError):
+    status = 422
+    slug = "invalid-profile"
+    title = "Invalid profile"
+
+
 def _problem(status: int, slug: str, title: str, detail: str, **extra: object) -> JSONResponse:
     body = {
         "type": f"{PROBLEM_BASE}/{slug}",

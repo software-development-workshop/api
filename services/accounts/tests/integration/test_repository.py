@@ -14,17 +14,24 @@ from accounts.repository import AccountsRepository
 
 VALID_PASSWORD_HASH = hash_password("Passw0rd")
 RESET_REQUESTED_AT = datetime(2030, 1, 2, 3, 4, 5, tzinfo=UTC)
+VERIFICATION_REQUESTED_AT = datetime(2030, 1, 2, 3, 4, 5, tzinfo=UTC)
 
 
 def account(email: str = "juan@udesa.edu.ar", handle: str = "juan") -> Account:
     return Account(email=email, handle=handle, password_hash=VALID_PASSWORD_HASH)
 
 
-def token(account_id: uuid.UUID, digest: str = "a" * 64, hours: int = 24) -> VerificationToken:
+def token(
+    account_id: uuid.UUID,
+    digest: str = "a" * 64,
+    hours: int = 24,
+    created_at: datetime = VERIFICATION_REQUESTED_AT,
+) -> VerificationToken:
     return VerificationToken(
         account_id=account_id,
         token_digest=digest,
-        expires_at=datetime.now(UTC) + timedelta(hours=hours),
+        expires_at=created_at + timedelta(hours=hours),
+        created_at=created_at,
     )
 
 
@@ -93,7 +100,7 @@ def test_stores_a_token_and_finds_it_by_its_digest(session: Session) -> None:
     repository = AccountsRepository(session)
     stored = repository.add(account())
 
-    saved = repository.issue_token(token(stored.id))
+    saved = repository.issue_token(token(stored.id), window=timedelta(minutes=15), limit=3)
 
     assert repository.find_token("a" * 64).id == saved.id
 
@@ -175,6 +182,58 @@ def test_persists_the_account_session_version(session: Session) -> None:
     assert reloaded.session_version == 4
 
 
+def test_persists_profile_fields_and_locks_only_active_accounts(session: Session) -> None:
+    repository = AccountsRepository(session)
+    stored = repository.add(account())
+
+    editable = repository.account_for_profile_update(stored.id)
+    editable.bio = "Bio"
+    editable.display_name = "Juan"
+    editable.handle = "nuevo"
+    repository.save(editable)
+
+    session.expire_all()
+    reloaded = session.get(Account, stored.id)
+    assert reloaded.bio == "Bio"
+    assert reloaded.display_name == "Juan"
+    assert reloaded.handle == "nuevo"
+
+    reloaded.suspended_at = datetime.now(UTC)
+    repository.save(reloaded)
+    assert repository.account_for_profile_update(stored.id) is None
+
+
+def test_persists_profile_text_with_html_escaping_at_the_logical_limit(
+    session: Session,
+) -> None:
+    repository = AccountsRepository(session)
+    stored = repository.add(account())
+    stored.bio = "x" * 158 + " &"
+    stored.display_name = "x" * 48 + " &lt;"
+
+    repository.save(stored)
+    session.expire_all()
+    reloaded = session.get(Account, stored.id)
+
+    assert reloaded.bio == "x" * 158 + " &"
+    assert reloaded.display_name == "x" * 48 + " &lt;"
+
+
+def test_duplicate_handle_on_profile_update_is_mapped_and_session_is_reusable(
+    session: Session,
+) -> None:
+    repository = AccountsRepository(session)
+    repository.add(account(handle="primero"))
+    second = repository.add(account(email="otro@udesa.edu.ar", handle="segundo"))
+    second.handle = "PRIMERO"
+
+    with pytest.raises(HandleTakenError):
+        repository.save(second)
+
+    second.handle = "segundo"
+    assert repository.save(second).handle == "segundo"
+
+
 def test_only_exposes_the_session_version_for_an_active_account(session: Session) -> None:
     repository = AccountsRepository(session)
     stored = repository.add(account())
@@ -214,10 +273,10 @@ def test_rejects_a_hash_that_is_not_argon2id(session: Session, password_hash: st
 def test_issuing_burns_every_live_token_of_the_account(session: Session) -> None:
     repository = AccountsRepository(session)
     stored = repository.add(account())
-    repository.issue_token(token(stored.id, digest="c" * 64))
-    repository.issue_token(token(stored.id, digest="d" * 64))
+    repository.issue_token(token(stored.id, digest="c" * 64), window=timedelta(minutes=15), limit=3)
+    repository.issue_token(token(stored.id, digest="d" * 64), window=timedelta(minutes=15), limit=3)
 
-    repository.issue_token(token(stored.id, digest="e" * 64))
+    repository.issue_token(token(stored.id, digest="e" * 64), window=timedelta(minutes=15), limit=3)
 
     assert repository.find_token("c" * 64).used_at is not None
     assert repository.find_token("d" * 64).used_at is not None
@@ -227,7 +286,7 @@ def test_issuing_burns_every_live_token_of_the_account(session: Session) -> None
 def test_consuming_stamps_the_token_and_the_account(session: Session) -> None:
     repository = AccountsRepository(session)
     stored = repository.add(account())
-    saved = repository.issue_token(token(stored.id))
+    saved = repository.issue_token(token(stored.id), window=timedelta(minutes=15), limit=3)
 
     verified = repository.consume_token(saved)
 
@@ -238,7 +297,7 @@ def test_consuming_stamps_the_token_and_the_account(session: Session) -> None:
 def test_consuming_a_spent_token_answers_nothing(session: Session) -> None:
     repository = AccountsRepository(session)
     stored = repository.add(account())
-    saved = repository.issue_token(token(stored.id))
+    saved = repository.issue_token(token(stored.id), window=timedelta(minutes=15), limit=3)
     repository.consume_token(saved)
 
     assert repository.consume_token(saved) is None
@@ -249,6 +308,8 @@ def test_issuing_a_password_reset_stores_only_the_digest_and_replaces_the_live_l
 ) -> None:
     repository = AccountsRepository(session)
     stored = repository.add(account())
+    stored.verified_at = RESET_REQUESTED_AT
+    repository.save(stored)
     raw_token = "first-reset-token"
     first_digest = tokens.digest(raw_token)
     first = repository.issue_password_reset(
@@ -275,6 +336,8 @@ def test_password_reset_limit_allows_only_three_issues_inside_the_window(
 ) -> None:
     repository = AccountsRepository(session)
     stored = repository.add(account())
+    stored.verified_at = RESET_REQUESTED_AT
+    repository.save(stored)
 
     issued = [
         repository.issue_password_reset(
@@ -292,11 +355,34 @@ def test_password_reset_limit_allows_only_three_issues_inside_the_window(
     assert len(list(rows)) == 3
 
 
+def test_verification_limit_allows_only_three_issues_inside_the_window(
+    session: Session,
+) -> None:
+    repository = AccountsRepository(session)
+    stored = repository.add(account())
+
+    issued = [
+        repository.issue_token(
+            token(stored.id, digest=str(index) * 64),
+            window=timedelta(minutes=15),
+            limit=3,
+        )
+        for index in range(1, 5)
+    ]
+
+    rows = session.execute(
+        select(VerificationToken).where(VerificationToken.account_id == stored.id)
+    ).scalars()
+    assert [record is not None for record in issued] == [True, True, True, False]
+    assert len(list(rows)) == 3
+
+
 def test_consuming_a_password_reset_updates_the_account_and_uses_every_live_link(
     session: Session,
 ) -> None:
     repository = AccountsRepository(session)
     stored = repository.add(account())
+    stored.verified_at = RESET_REQUESTED_AT
     stored.failed_login_attempts = 5
     stored.locked_until = RESET_REQUESTED_AT + timedelta(minutes=15)
     stored.session_version = 2
