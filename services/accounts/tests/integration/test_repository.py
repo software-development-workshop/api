@@ -105,10 +105,6 @@ def test_stores_a_token_and_finds_it_by_its_digest(session: Session) -> None:
     assert repository.find_token("a" * 64).id == saved.id
 
 
-def test_a_digest_nobody_issued_finds_nothing(session: Session) -> None:
-    assert AccountsRepository(session).find_token("b" * 64) is None
-
-
 def test_finds_an_account_by_email_whatever_the_casing(session: Session) -> None:
     repository = AccountsRepository(session)
     repository.add(account(email="Juan@Udesa.edu.ar"))

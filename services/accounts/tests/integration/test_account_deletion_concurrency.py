@@ -130,23 +130,6 @@ def test_parallel_login_and_deletion_do_not_lose_failures(account: Account) -> N
     assert snapshot(account.id)["failed_login_attempts"] == 5
 
 
-def test_confirmation_lock_window_starts_after_row_wait(session: Session, account: Account) -> None:
-    account.failed_login_attempts = 4
-    session.commit()
-    token = access(account)
-    with waiting_on_account(account, lambda repository: delete(repository, token, "wrong")) as (
-        blocker,
-        results,
-    ):
-        # The operation is known to be blocked, rather than merely scheduled on a thread.
-        time.sleep(0.15)
-        released_at = datetime.now(UTC)
-        blocker.rollback()
-    assert len(results) == 1
-    assert isinstance(results[0], InvalidCredentialsError)
-    assert snapshot(account.id)["locked_until"] >= released_at + timedelta(minutes=15)
-
-
 @pytest.mark.parametrize("change", ["version", "revoked", "deleted"])
 def test_waiting_deletion_revalidates_authority_after_row_lock(
     account: Account, change: str

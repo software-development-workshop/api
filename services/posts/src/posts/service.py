@@ -1,31 +1,17 @@
-import uuid
-from typing import Protocol
-
 import nh3
 
+from posts.accounts_client import AccountsClient
 from posts.errors import InvalidPostContentError, PostRateLimitExceededError
 from posts.models import Post
+from posts.repository import PostsRepository
 
 MAX_POST_LENGTH = 280
 HOURLY_POST_LIMIT = 30
 
 
-class IdentityProvider(Protocol):
-    def introspect(self, token: str) -> uuid.UUID: ...
-
-
-class PostWriter(Protocol):
-    def create_within_hourly_limit(
-        self,
-        author_id: uuid.UUID,
-        content: str,
-        limit: int = HOURLY_POST_LIMIT,
-    ) -> Post | None: ...
-
-
 def create_post(
-    repository: PostWriter,
-    identity_provider: IdentityProvider,
+    repository: PostsRepository,
+    identity_provider: AccountsClient,
     token: str,
     content: str,
 ) -> Post:
