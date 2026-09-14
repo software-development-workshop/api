@@ -12,7 +12,7 @@ from posts.config import API_PREFIX
 from posts.db import get_session
 from posts.errors import InvalidAccessTokenError
 from posts.repository import PostsRepository
-from posts.service import IdentityProvider, create_post
+from posts.service import create_post
 
 router = APIRouter(prefix=API_PREFIX)
 
@@ -28,7 +28,7 @@ def get_identity_provider(request: Request) -> AccountsClient:
 
 
 RepositoryDep = Annotated[PostsRepository, Depends(get_repository)]
-IdentityProviderDep = Annotated[IdentityProvider, Depends(get_identity_provider)]
+IdentityProviderDep = Annotated[AccountsClient, Depends(get_identity_provider)]
 BearerDep = Annotated[
     HTTPAuthorizationCredentials | None,
     Depends(HTTPBearer(auto_error=False)),
