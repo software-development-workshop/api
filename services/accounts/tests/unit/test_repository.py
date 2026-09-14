@@ -144,6 +144,12 @@ def test_password_reset_identifier_lookup_normalises_email_or_handle(
     assert canonical in compiled.params.values()
 
 
+def test_a_digest_nobody_issued_finds_nothing() -> None:
+    session = LookupSession(None)
+
+    assert AccountsRepository(session).find_token("b" * 64) is None  # type: ignore[arg-type]
+
+
 def test_password_reset_lookup_uses_the_token_digest() -> None:
     record = PasswordResetToken(account_id=uuid.uuid4(), token_digest="a" * 64)
     session = LookupSession(record)
