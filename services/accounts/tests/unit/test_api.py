@@ -1,58 +1,17 @@
-from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
 
 import jwt
 import pytest
 from fastapi.testclient import TestClient
 
-from accounts import recovery, tokens
+from accounts import tokens
 from accounts.access_tokens import issue
-from accounts.api import get_mailer, get_repository
-from accounts.config import get_settings
-from accounts.errors import VerificationEmailNotSentError
+from accounts.api import get_mailer
 from accounts.main import app
 from accounts.models import Account
-from tests.fakes import FailingPasswordResetMailer, FakeMailer
+from tests.fakes import FailingPasswordResetMailer, FakeMailer, RefusingMailer
 from tests.unit.fakes import FakeAccountsRepository
-
-VALID = {"email": "juan@udesa.edu.ar", "handle": "@juan", "password": "Passw0rd"}
-JWT_SECRET = "unit-test-jwt-secret-longer-than-32-bytes"
-
-
-class RefusingMailer:
-    """Stands in for a mail provider that refuses the send."""
-
-    def send_verification(self, to: str, token: str) -> None:
-        raise VerificationEmailNotSentError("Ask for a new one from the login screen.")
-
-
-@pytest.fixture
-def repository(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeAccountsRepository]:
-    fake = FakeAccountsRepository()
-    monkeypatch.setattr(recovery, "get_engine", lambda: None)
-    monkeypatch.setattr(recovery, "AccountsRepository", lambda session: fake)
-    app.dependency_overrides[get_repository] = lambda: fake
-    yield fake
-    app.dependency_overrides.clear()
-
-
-@pytest.fixture
-def mailer(repository: FakeAccountsRepository) -> FakeMailer:
-    fake = FakeMailer()
-    app.dependency_overrides[get_mailer] = lambda: fake
-    return fake
-
-
-@pytest.fixture
-def client(mailer: FakeMailer) -> TestClient:
-    app.dependency_overrides[get_settings] = lambda: SimpleNamespace(jwt_secret=JWT_SECRET)
-    return TestClient(app)
-
-
-def verify_registered_account(client: TestClient, mailer: FakeMailer) -> None:
-    client.post("/api/v1/registrations", json=VALID)
-    client.get(f"/api/v1/verifications/{mailer.last_token}")
+from tests.unit.helpers import JWT_SECRET, VALID, verify_registered_account
 
 
 def authenticated_headers(client: TestClient, mailer: FakeMailer) -> dict[str, str]:

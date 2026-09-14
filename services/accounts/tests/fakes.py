@@ -1,3 +1,6 @@
+from accounts.errors import VerificationEmailNotSentError
+
+
 class FakeMailer:
     def __init__(self) -> None:
         self.sent: list[tuple[str, str]] = []
@@ -21,3 +24,10 @@ class FakeMailer:
 class FailingPasswordResetMailer(FakeMailer):
     def send_password_reset(self, to: str, token: str) -> None:
         raise ConnectionError("mail provider unavailable")
+
+
+class RefusingMailer:
+    """Stands in for a mail provider that refuses the send."""
+
+    def send_verification(self, to: str, token: str) -> None:
+        raise VerificationEmailNotSentError("Ask for a new one from the login screen.")
