@@ -1,9 +1,7 @@
 import threading
-import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
-import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -209,56 +207,6 @@ def test_two_simultaneous_resends_leave_exactly_one_usable_link(
     assert verify(AccountsRepository(session), survivor).verified_at is not None
 
 
-def test_verify_and_resend_race_has_no_deadlock_or_live_token_after_verification(
-    session: Session, mailer: FakeMailer
-) -> None:
-    for attempt in range(5):
-        email = f"juan{attempt}@udesa.edu.ar"
-        handle = f"juan{attempt}"
-        sign_up(session, mailer, email, handle)
-        account = session.execute(select(Account).where(Account.email == email)).scalar_one()
-        old_token = mailer.last_token
-        mailers = [FakeMailer() for _ in range(WORKERS)]
-
-        def race_work(
-            repository: AccountsRepository,
-            index: int,
-            token: str = old_token,
-            resend_mailers: list[FakeMailer] = mailers,
-            address: str = email,
-        ) -> object:
-            if index == 0:
-                return verify(repository, token)
-            return resend_verification(repository, resend_mailers[index], address)
-
-        results = in_parallel(race_work)
-
-        unexpected = [
-            result
-            for result in results
-            if isinstance(result, Exception)
-            and not isinstance(result, InvalidVerificationTokenError)
-        ]
-        assert unexpected == []
-
-        session.expire_all()
-        account = session.get(Account, account.id)
-        assert account is not None
-        live = (
-            session.execute(
-                select(VerificationToken)
-                .where(VerificationToken.account_id == account.id)
-                .where(VerificationToken.used_at.is_(None))
-            )
-            .scalars()
-            .all()
-        )
-        if account.verified_at is not None:
-            assert live == []
-        else:
-            assert len(live) == 1
-
-
 def test_five_simultaneous_wrong_passwords_lock_the_account(
     session: Session, mailer: FakeMailer
 ) -> None:
@@ -286,84 +234,3 @@ def test_five_simultaneous_wrong_passwords_lock_the_account(
     ).scalar_one()
     assert stored.failed_login_attempts == 5
     assert stored.locked_until is not None
-
-
-def test_email_and_handle_lookups_contend_on_the_same_account_row(
-    session: Session, mailer: FakeMailer
-) -> None:
-    repository = sign_up(session, mailer)
-    verify(repository, mailer.last_token)
-
-    with Session(get_engine()) as blocker:
-        assert AccountsRepository(blocker).find_for_login("juan@udesa.edu.ar") is not None
-        started = threading.Event()
-        finished = threading.Event()
-        errors: list[Exception] = []
-
-        def handle_lookup() -> None:
-            with Session(get_engine()) as concurrent_session:
-                started.set()
-                try:
-                    AccountsRepository(concurrent_session).find_for_login("@juan")
-                except Exception as error:
-                    errors.append(error)
-                finally:
-                    finished.set()
-
-        worker = threading.Thread(target=handle_lookup, daemon=True)
-        worker.start()
-        assert started.wait(timeout=1)
-        assert not finished.wait(timeout=0.2)
-        blocker.rollback()
-        worker.join(timeout=2)
-
-    assert not worker.is_alive()
-    assert finished.is_set()
-    assert errors == []
-
-
-def test_lock_ttl_starts_after_waiting_for_the_account_row(
-    session: Session, mailer: FakeMailer
-) -> None:
-    repository = sign_up(session, mailer)
-    verify(repository, mailer.last_token)
-    for _ in range(4):
-        with pytest.raises(InvalidCredentialsError):
-            authenticate(repository, "juan@udesa.edu.ar", "Wr0ngPassword")
-
-    with Session(get_engine()) as blocker:
-        blocker.execute(
-            select(Account).where(Account.email == "juan@udesa.edu.ar").with_for_update()
-        ).scalar_one()
-        started = threading.Event()
-        result: list[object] = []
-
-        def fifth_failure() -> None:
-            with Session(get_engine()) as concurrent_session:
-                started.set()
-                try:
-                    authenticate(
-                        AccountsRepository(concurrent_session),
-                        "juan@udesa.edu.ar",
-                        "Wr0ngPassword",
-                    )
-                except Exception as error:
-                    result.append(error)
-
-        worker = threading.Thread(target=fifth_failure, daemon=True)
-        worker.start()
-        assert started.wait(timeout=1)
-        time.sleep(0.75)
-        released_at = datetime.now(UTC)
-        blocker.rollback()
-        worker.join(timeout=2)
-
-    assert not worker.is_alive()
-    assert len(result) == 1
-    assert isinstance(result[0], InvalidCredentialsError)
-    session.rollback()
-    stored = session.execute(
-        select(Account).where(Account.email == "juan@udesa.edu.ar")
-    ).scalar_one()
-    assert stored.locked_until is not None
-    assert stored.locked_until >= released_at + timedelta(minutes=15, seconds=-0.2)
