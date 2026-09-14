@@ -46,6 +46,16 @@ The Accounts API docs are at <http://localhost:8000/docs> and the Posts API docs
 inbox. Send to `delivered@resend.dev` to
 exercise the flow without filling your own inbox.
 
+### Explore the API
+
+[`postman/`](postman) holds a Postman collection covering both services and an environment
+pointing at the Compose ports. Import the two files separately, then pick **UdeSA-X local** in
+the environment selector.
+
+Its folders are ordered by dependency, and so are the requests inside them: run them top to
+bottom. Set `test_email` to an inbox you can open first — the verification and password reset
+links exist only in those emails, and the collection asks you to paste their tokens back in.
+
 ## Work on a service
 
 ### Recovery responses

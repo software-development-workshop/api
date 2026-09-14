@@ -1,0 +1,315 @@
+{
+  "info": {
+    "_postman_id": "fd070ec3-4150-48f4-8af6-47fc98997789",
+    "name": "UdeSA-X",
+    "description": "Manual exploration of the UdeSA-X API.\n\nFolders are ordered by dependency and so are the requests inside them: run them top to bottom. The OpenAPI schemas at http://localhost:8000/docs and http://localhost:8001/docs describe every endpoint, but not the order, and the order is what blocks you. An account that is not verified cannot log in, and without a session there is no profile, no post and no deletion.\n\nSelect the 'UdeSA-X local' environment before running anything. Log in stores the access token there; nothing else needs copying except the two tokens that only exist inside an email.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      { "key": "token", "value": "{{access_token}}", "type": "string" }
+    ]
+  },
+  "item": [
+    {
+      "name": "Health",
+      "description": "Both services answer before anything else is worth trying.",
+      "item": [
+        {
+          "name": "Accounts is up",
+          "request": {
+            "method": "GET",
+            "auth": { "type": "noauth" },
+            "header": [],
+            "url": {
+              "raw": "{{accounts_url}}/health",
+              "host": ["{{accounts_url}}"],
+              "path": ["health"]
+            },
+            "description": "Returns 200 once Accounts has started and its database is reachable."
+          },
+          "response": []
+        },
+        {
+          "name": "Posts is up",
+          "request": {
+            "method": "GET",
+            "auth": { "type": "noauth" },
+            "header": [],
+            "url": {
+              "raw": "{{posts_url}}/health",
+              "host": ["{{posts_url}}"],
+              "path": ["health"]
+            },
+            "description": "Returns 200 once Posts has started. Compose only starts Posts after Accounts is healthy, because Posts authenticates through it."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Registration",
+      "description": "Creating an account and activating it. Nothing else in this collection works until the account is verified.",
+      "item": [
+        {
+          "name": "Register an account",
+          "request": {
+            "method": "POST",
+            "auth": { "type": "noauth" },
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{accounts_url}}/api/v1/registrations",
+              "host": ["{{accounts_url}}"],
+              "path": ["api", "v1", "registrations"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{test_email}}\",\n  \"handle\": \"{{test_handle}}\",\n  \"password\": \"{{test_password}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Creates an unverified account and sends the verification link. Returns 201 with verified: false.\n\nThe handle starts with '@' followed by 4 to 15 letters, numbers or underscores. The password is 8 to 128 characters with at least one uppercase letter and one number.\n\nSet test_email to an inbox you can open: the verification link exists nowhere else. delivered@resend.dev accepts the mail without filling your own inbox, but then you never see the link and cannot continue past this folder.\n\nRegistration waits for the email, so a delivery failure returns 502 and the address stays taken."
+          },
+          "response": []
+        },
+        {
+          "name": "Resend the verification email",
+          "request": {
+            "method": "POST",
+            "auth": { "type": "noauth" },
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{accounts_url}}/api/v1/verifications/resend",
+              "host": ["{{accounts_url}}"],
+              "path": ["api", "v1", "verifications", "resend"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{test_email}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Issues a fresh link when the first one expired or never arrived.\n\nReturns an empty 202 before looking the account up, so it never reveals whether the address is registered. A 202 confirms neither that an account exists nor that mail was delivered."
+          },
+          "response": []
+        },
+        {
+          "name": "Verify the account",
+          "request": {
+            "method": "GET",
+            "auth": { "type": "noauth" },
+            "header": [],
+            "url": {
+              "raw": "{{accounts_url}}/api/v1/verifications/{{verification_token}}",
+              "host": ["{{accounts_url}}"],
+              "path": ["api", "v1", "verifications", "{{verification_token}}"]
+            },
+            "description": "Activates the account. Returns 200 with verified: true.\n\nOpen the email and copy the last segment of the link into the verification_token variable. The link is PUBLIC_BASE_URL/api/v1/verifications/<token>, so clicking it does exactly what this request does.\n\nThe link expires in 24 hours and can only be spent once: a second attempt returns 400."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Session",
+      "description": "Logging in, checking who the token belongs to, and giving it back. Requires a verified account.",
+      "item": [
+        {
+          "name": "Log in",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set('access_token', pm.response.json().access_token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": { "type": "noauth" },
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{accounts_url}}/api/v1/sessions",
+              "host": ["{{accounts_url}}"],
+              "path": ["api", "v1", "sessions"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"identifier\": \"{{test_handle}}\",\n  \"password\": \"{{test_password}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Returns a bearer token and its lifetime in seconds. identifier takes either the handle or the email.\n\nThis request stores access_token in the environment, which is why every authenticated request below works without copying anything by hand. It is the only script in the collection and it asserts nothing.\n\nAn unverified account returns 403, a deleted one 403, and five wrong passwords lock the account for 15 minutes."
+          },
+          "response": []
+        },
+        {
+          "name": "Introspect the session",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{accounts_url}}/api/v1/sessions/introspect",
+              "host": ["{{accounts_url}}"],
+              "path": ["api", "v1", "sessions", "introspect"]
+            },
+            "description": "Returns the account_id behind the current access token.\n\nPosts calls this same endpoint to resolve the author of a publish request, so a 200 here means a publish will authenticate too."
+          },
+          "response": []
+        },
+        {
+          "name": "Log out",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{accounts_url}}/api/v1/sessions/logout",
+              "host": ["{{accounts_url}}"],
+              "path": ["api", "v1", "sessions", "logout"]
+            },
+            "description": "Revokes the current access token and returns 204.\n\nRun Introspect afterwards to see it: the same token now returns 401. The stored access_token stays in the environment until the next Log in overwrites it."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Recovery",
+      "description": "Choosing a new password from the link in an email. Independent of the session: run it logged out.",
+      "item": [
+        {
+          "name": "Request a password reset",
+          "request": {
+            "method": "POST",
+            "auth": { "type": "noauth" },
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{accounts_url}}/api/v1/password-resets",
+              "host": ["{{accounts_url}}"],
+              "path": ["api", "v1", "password-resets"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"identifier\": \"{{test_handle}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Sends a reset link. identifier takes the handle or the email.\n\nReturns an empty 202 before checking anything, for the same reason the resend endpoint does. The link expires in 10 minutes."
+          },
+          "response": []
+        },
+        {
+          "name": "Complete the password reset",
+          "request": {
+            "method": "POST",
+            "auth": { "type": "noauth" },
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{accounts_url}}/api/v1/password-resets/{{reset_token}}",
+              "host": ["{{accounts_url}}"],
+              "path": ["api", "v1", "password-resets", "{{reset_token}}"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"new_password\": \"N3wPassw0rd\",\n  \"password_confirmation\": \"N3wPassw0rd\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Replaces the password and returns 204.\n\nThe email links to PUBLIC_BASE_URL/reset-password?token=<token>, a front-end route that does not exist yet, so copy the token out of the query string into reset_token.\n\nThe new password must differ from the current one, and it has to match password_confirmation. A successful reset revokes every existing session, so update test_password and log in again."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Profile",
+      "description": "Editing the account behind the current token. Requires Log in.",
+      "item": [
+        {
+          "name": "Update my profile",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{accounts_url}}/api/v1/accounts/me",
+              "host": ["{{accounts_url}}"],
+              "path": ["api", "v1", "accounts", "me"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"display_name\": \"Test User\",\n  \"bio\": \"Exploring the UdeSA-X API.\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Partial update: send only the fields you want to change, and send null to clear one.\n\ndisplay_name is at most 50 characters, bio at most 160, and both have markup stripped before they are stored. An unknown field is rejected rather than ignored.\n\nhandle is accepted here too, but changing it also changes what you log in with, so it is left out of this body."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Posts",
+      "description": "The other service. Requires Log in, because Posts authenticates through Accounts.",
+      "item": [
+        {
+          "name": "Publish a post",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{posts_url}}/api/v1/posts",
+              "host": ["{{posts_url}}"],
+              "path": ["api", "v1", "posts"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"content\": \"Mi primera publicacion en UdeSA-X\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Publishes a post and returns 201 with its counters at zero.\n\nContent is 1 to 280 characters, measured after markup is stripped. A user may publish 30 posts per hour; the next one returns 429.\n\nPosts does not read the token itself: it calls POST /api/v1/sessions/introspect on Accounts to resolve the author. This is the one request that exercises both services at once, and it returns 503 when Accounts is unreachable."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Deletion",
+      "description": "The end of the happy path. Run it last: everything above stops working afterwards.",
+      "item": [
+        {
+          "name": "Delete my account",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{accounts_url}}/api/v1/account-deletions",
+              "host": ["{{accounts_url}}"],
+              "path": ["api", "v1", "account-deletions"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"password\": \"{{test_password}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Confirms with the current password and returns 204. The account is taken from the token, never from the body.\n\nAfterwards every existing token fails introspection with 401 and Log in returns 403. The email and handle stay reserved: this is the Accounts-only slice of deletion, not complete erasure.\n\nWrong confirmations share their budget with Log in: five of them lock the account for 15 minutes and return 423."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
