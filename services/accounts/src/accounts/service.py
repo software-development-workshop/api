@@ -121,13 +121,12 @@ def authenticate(
     now: datetime | None = None,
 ) -> Account:
     account = repository.find_for_login(identifier)
-    password_hash = account.password_hash if account is not None else None
-    password_matches = verify_password(password_hash, password)
-    attempted_at = now or datetime.now(UTC)
     if account is None:
         repository.finish_login_attempt(None)
         raise InvalidCredentialsError("Invalid credentials.")
 
+    attempted_at = now or datetime.now(UTC)
+    password_matches = verify_password(account.password_hash, password)
     lock_is_active = account.locked_until is not None and account.locked_until > attempted_at
     if not password_matches:
         if not lock_is_active:

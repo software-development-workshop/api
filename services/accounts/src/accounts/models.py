@@ -9,11 +9,7 @@ HANDLE_MAX_LENGTH = 15
 EMAIL_MAX_LENGTH = 254
 BIO_MAX_STORAGE_LENGTH = 640
 DISPLAY_NAME_MAX_STORAGE_LENGTH = 200
-ACCOUNT_HASH_CONSTRAINT = (
-    "length(password_hash) = 97 AND "
-    "password_hash ~ '^[$]argon2id[$]v=19[$]m=19456,t=2,p=1"
-    "[$][A-Za-z0-9+/]{22}[$][A-Za-z0-9+/]{43}$'"
-)
+ACCOUNT_HASH_CONSTRAINT = "password_hash LIKE '$argon2id$%'"
 
 
 class Base(DeclarativeBase):
@@ -44,7 +40,7 @@ class Account(Base):
     __table_args__ = (
         CheckConstraint(
             ACCOUNT_HASH_CONSTRAINT,
-            name="ck_accounts_password_hash_supported",
+            name="ck_accounts_password_hash_is_argon2id",
         ),
         Index("ix_accounts_email_lower", text("lower(email)"), unique=True),
         Index("ix_accounts_handle_lower", text("lower(handle)"), unique=True),
